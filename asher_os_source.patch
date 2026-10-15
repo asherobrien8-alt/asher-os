@@ -1,0 +1,834 @@
+diff --git a/apps/SOURCES b/apps/SOURCES
+index bb612b3..44a39db 100644
+--- a/apps/SOURCES
++++ b/apps/SOURCES
+@@ -20,6 +20,9 @@ menu.c
+ menus/menu_common.c
+ menus/display_menu.c
+ menus/theme_menu.c
++asher/moonphase.c
++asher/asher_wallpaper.c
++asher/asher_theme.c
+ menus/plugin_menu.c
+ #if CONFIG_TUNER
+ menus/radio_menu.c
+diff --git a/apps/asher/asher_theme.c b/apps/asher/asher_theme.c
+new file mode 100644
+index 0000000..e9d9192
+--- /dev/null
++++ b/apps/asher/asher_theme.c
+@@ -0,0 +1,64 @@
++#include <stdio.h>
++#include <string.h>
++#include <fcntl.h>
++#include "config.h"
++#include "file.h"
++#include "settings.h"
++#include "menu.h"
++#include "splash.h"
++#include "lang.h"
++#include "asher_theme.h"
++#include "asher_wallpaper.h"
++
++#define THEME_DIR  "/.rockbox/asher/themes/"
++#define STATE_FILE "/.rockbox/asher/theme.txt"
++#define NUM_THEMES 4
++
++static const char *theme_file[NUM_THEMES] = { "daybreak", "glass", "dark", "classic" };
++static const char *theme_name[NUM_THEMES] = { "Daybreak", "Glass", "Dark", "Classic" };
++static int cur_theme = 0;
++
++static void save_state(void)
++{
++    int fd = open(STATE_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
++    if (fd >= 0) { char c = '0' + cur_theme; write(fd, &c, 1); close(fd); }
++}
++
++static void apply(int i)
++{
++    char path[MAX_PATH];
++    cur_theme = i;
++    snprintf(path, sizeof(path), THEME_DIR "%s.cfg", theme_file[i]);
++    settings_load_config(path, true);
++    /* Only Daybreak has a live wallpaper that follows the time of day;
++     * Glass has its own looping one. Dark/Classic are static. */
++    if (i == 0) asher_wallpaper_set_scene(asher_scene_for_time());
++    else if (i == 1) asher_wallpaper_set_scene("glass");
++    else asher_wallpaper_stop();
++    save_state();
++}
++
++void asher_theme_apply_saved(void)
++{
++    int fd = open(STATE_FILE, O_RDONLY);
++    int i = 0;
++    if (fd >= 0) { char c; if (read(fd, &c, 1) == 1 && c >= '0' && c < '0' + NUM_THEMES) i = c - '0'; close(fd); }
++    apply(i);
++}
++
++static int theme_cycle(void)
++{
++    apply((cur_theme + 1) % NUM_THEMES);
++    splashf(HZ, "Theme: %s", theme_name[cur_theme]);
++    return 0;
++}
++
++static int wallpaper_toggle(void)
++{
++    asher_wallpaper_enabled = !asher_wallpaper_enabled;
++    splashf(HZ, "Live wallpaper: %s", asher_wallpaper_enabled ? "On" : "Off");
++    return 0;
++}
++
++MENUITEM_FUNCTION(asher_theme_item, 0, "Theme (tap to switch)", theme_cycle, NULL, Icon_NOICON);
++MENUITEM_FUNCTION(asher_wallpaper_item, 0, "Live Wallpaper On/Off", wallpaper_toggle, NULL, Icon_NOICON);
+diff --git a/apps/asher/asher_theme.h b/apps/asher/asher_theme.h
+new file mode 100644
+index 0000000..e36845a
+--- /dev/null
++++ b/apps/asher/asher_theme.h
+@@ -0,0 +1,7 @@
++#ifndef ASHER_THEME_H
++#define ASHER_THEME_H
++#include "menu.h"
++extern const struct menu_item_ex asher_theme_item;
++extern const struct menu_item_ex asher_wallpaper_item;
++void asher_theme_apply_saved(void);   /* call once at boot */
++#endif
+diff --git a/apps/asher/asher_wallpaper.c b/apps/asher/asher_wallpaper.c
+new file mode 100644
+index 0000000..ac1f2f5
+--- /dev/null
++++ b/apps/asher/asher_wallpaper.c
+@@ -0,0 +1,81 @@
++#include <stdio.h>
++#include <string.h>
++#include <fcntl.h>
++#include "config.h"
++#include "system.h"
++#include "kernel.h"
++#include "file.h"
++#include "timefuncs.h"
++#include "lcd.h"
++#include "asher_wallpaper.h"
++#include "moonphase.h"
++
++#define AWP_DIR "/.rockbox/asher/wallpaper/"
++#define AWP_HDR 12
++
++extern void skin_backdrop_animate(const void *frame, size_t bytes);
++
++bool asher_wallpaper_enabled = true;
++
++static int fd = -1;
++static int nframes, frame_ms, cur;
++static long next_tick;
++static char scene[32];
++/* Frame buffer; the iPod Classic has 64 MB so a static 150 KB is fine. */
++static fb_data frame_buf[LCD_WIDTH * LCD_HEIGHT];
++
++void asher_wallpaper_stop(void)
++{
++    if (fd >= 0) { close(fd); fd = -1; }
++    scene[0] = '\0';
++}
++
++void asher_wallpaper_set_scene(const char *name)
++{
++    char path[MAX_PATH];
++    unsigned char h[AWP_HDR];
++    if (!strcmp(name, scene) && fd >= 0) return;   /* already playing */
++    asher_wallpaper_stop();
++    snprintf(path, sizeof(path), AWP_DIR "%s.awp", name);
++    fd = open(path, O_RDONLY);
++    if (fd < 0) return;
++    if (read(fd, h, AWP_HDR) != AWP_HDR || memcmp(h, "AWP1", 4)
++        || (h[4] | h[5] << 8) != LCD_WIDTH || (h[6] | h[7] << 8) != LCD_HEIGHT)
++    { close(fd); fd = -1; return; }
++    nframes  = h[8] | h[9] << 8;
++    frame_ms = h[10] | h[11] << 8;
++    if (nframes < 1) { close(fd); fd = -1; return; }
++    strmemccpy(scene, name, sizeof(scene));
++    cur = 0;
++    next_tick = current_tick;
++}
++
++const char *asher_scene_for_time(void)
++{
++    static char name[24];
++    struct tm *t = get_time();
++    int h = t->tm_hour;
++    if (h >= 5 && h < 9)       return "sunrise";
++    if (h >= 9 && h < 16)      return "sunup";
++    if (h >= 16 && h < 20)     return "sunset";
++    {
++        int p = asher_moon_phase(t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
++        /* 20:00-23:00 moon rising, 23:00-05:00 moon high */
++        snprintf(name, sizeof(name), (h >= 20 && h < 23) ? "moonrise%d"
++                                                          : "moonhigh%d", p);
++    }
++    return name;
++}
++
++bool asher_wallpaper_tick(void)
++{
++    if (!asher_wallpaper_enabled || fd < 0 || TIME_BEFORE(current_tick, next_tick))
++        return false;
++    next_tick = current_tick + (frame_ms * HZ) / 1000;
++    if (lseek(fd, AWP_HDR + (off_t)cur * sizeof(frame_buf), SEEK_SET) < 0 ||
++        read(fd, frame_buf, sizeof(frame_buf)) != (ssize_t)sizeof(frame_buf))
++        { cur = 0; return false; }
++    cur = (cur + 1) % nframes;
++    skin_backdrop_animate(frame_buf, sizeof(frame_buf));
++    return true;
++}
+diff --git a/apps/asher/asher_wallpaper.h b/apps/asher/asher_wallpaper.h
+new file mode 100644
+index 0000000..72bef1c
+--- /dev/null
++++ b/apps/asher/asher_wallpaper.h
+@@ -0,0 +1,11 @@
++#ifndef ASHER_WALLPAPER_H
++#define ASHER_WALLPAPER_H
++#include <stdbool.h>
++/* Frame-pack (.awp) format: "AWP1", u16 width, u16 height, u16 frames,
++ * u16 frame_ms, then frames of raw RGB565 (little endian). */
++void asher_wallpaper_set_scene(const char *name);   /* e.g. "sunrise" */
++void asher_wallpaper_stop(void);
++bool asher_wallpaper_tick(void);   /* true if a new frame was shown */
++const char *asher_scene_for_time(void);  /* time-of-day + moon phase */
++extern bool asher_wallpaper_enabled;
++#endif
+diff --git a/apps/asher/moonphase.c b/apps/asher/moonphase.c
+new file mode 100644
+index 0000000..bbe9d9a
+--- /dev/null
++++ b/apps/asher/moonphase.c
+@@ -0,0 +1,20 @@
++#include "moonphase.h"
++
++/* Days since a known new moon (2000-01-06 18:14 UTC), mod synodic month. */
++int asher_moon_phase(int year, int month, int day)
++{
++    /* Julian day number at noon for the given date */
++    int a = (14 - month) / 12;
++    int y = year + 4800 - a;
++    int m = month + 12 * a - 3;
++    long jdn = day + (153 * m + 2) / 5 + 365L * y + y / 4 - y / 100
++               + y / 400 - 32045;
++
++    /* Work in hundredths of a day to avoid floats on the iPod CPU.
++     * Reference new moon JD = 2451550.26, synodic month = 29.530589 d */
++    long since = (jdn - 2451550L) * 100 - 26;
++    long cycle = 2953;                       /* 29.53 days, x100 */
++    long pos = since % cycle;
++    if (pos < 0) pos += cycle;
++    return (int)((pos * 8 + cycle / 2) / cycle) & 7;
++}
+diff --git a/apps/asher/moonphase.h b/apps/asher/moonphase.h
+new file mode 100644
+index 0000000..c667aaf
+--- /dev/null
++++ b/apps/asher/moonphase.h
+@@ -0,0 +1,6 @@
++#ifndef ASHER_MOONPHASE_H
++#define ASHER_MOONPHASE_H
++/* Returns moon phase index 0..7 (0=new, 2=first quarter, 4=full,
++ * 6=last quarter) from the calendar date. No live data needed. */
++int asher_moon_phase(int year, int month, int day);
++#endif
+diff --git a/apps/bitmaps/native/rockboxlogo.220x68x16.bmp b/apps/bitmaps/native/rockboxlogo.220x68x16.bmp
+index 1dc68a09f24c6dc1046298f962cc759c8e07fc3d..c3e80d630f366dd6bdeedfea58e97bc8b102c567 100644
+GIT binary patch
+literal 44934
+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
+S76BFk76BFk7J>iE2>cKJPl15|
+
+literal 44934
+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
+OoqL|nHSqV-!2bsanWB~e
+
+diff --git a/apps/gui/skin_engine/skin_backdrops.c b/apps/gui/skin_engine/skin_backdrops.c
+index 9446022..b968b37 100644
+--- a/apps/gui/skin_engine/skin_backdrops.c
++++ b/apps/gui/skin_engine/skin_backdrops.c
+@@ -383,3 +383,18 @@ void skin_backdrop_show(int backdrop_id)
+     (void) backdrop_id;
+ }
+ #endif
++
++
++#if defined(HAVE_BACKDROP_IMAGE)
++/* Asher OS: overwrite the active main-screen backdrop with a new frame. */
++void skin_backdrop_animate(const void *frame, size_t bytes)
++{
++    int id = current_lcd_backdrop[SCREEN_MAIN];
++    if (id < 0 || !backdrops[id].buffer || bytes > LCD_BACKDROP_BYTES)
++        return;
++    core_pin(backdrops[id].buflib_handle);
++    memcpy(backdrops[id].buffer, frame, bytes);
++    core_unpin(backdrops[id].buflib_handle);
++    skin_backdrop_show(id);
++}
++#endif
+diff --git a/apps/gui/wps.c b/apps/gui/wps.c
+index 12fda68..24febdd 100644
+--- a/apps/gui/wps.c
++++ b/apps/gui/wps.c
+@@ -60,6 +60,7 @@
+ #include "option_select.h"
+ #include "playlist_viewer.h"
+ #include "wps.h"
++#include "asher/asher_wallpaper.h"
+ #include "statusbar-skinned.h"
+ #include "skin_engine/wps_internals.h"
+ #include "open_plugin.h"
+@@ -115,6 +116,7 @@ char* wps_default_skin(enum screen_type screen)
+ 
+ static void update_non_static(void)
+ {
++    asher_wallpaper_tick();
+     FOR_NB_SCREENS(i)
+         skin_update(WPS, i, SKIN_REFRESH_NON_STATIC);
+ }
+diff --git a/apps/main.c b/apps/main.c
+index 38bc189..a110f6d 100644
+--- a/apps/main.c
++++ b/apps/main.c
+@@ -1,3 +1,4 @@
++#include "asher/asher_theme.h"
+ /***************************************************************************
+  *             __________               __   ___.
+  *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+@@ -805,6 +806,7 @@ static void init(void)
+     CHART("<settings_apply_skins");
+     settings_apply_skins();
+     CHART(">settings_apply_skins");
++    asher_theme_apply_saved();   /* Asher OS: restore chosen theme */
+ }
+ 
+ #ifdef CPU_PP
+diff --git a/apps/menus/main_menu.c b/apps/menus/main_menu.c
+index a09d81d..b76d9dc 100644
+--- a/apps/menus/main_menu.c
++++ b/apps/menus/main_menu.c
+@@ -26,6 +26,7 @@
+ #include "lang.h"
+ #include "action.h"
+ #include "settings.h"
++#include "asher/asher_theme.h"
+ #include "power.h"
+ #include "powermgmt.h"
+ #include "menu.h"
+@@ -508,17 +509,10 @@ MENUITEM_FUNCTION(main_menu_config_item, 0, ID2P(LANG_MAIN_MENU),
+ 
+ MAKE_MENU(main_menu_, ID2P(LANG_SETTINGS), NULL,
+         Icon_Submenu_Entered,
++        &asher_theme_item,
++        &asher_wallpaper_item,
+         &sound_settings,
+-        &playback_settings,
+-        &settings_menu_item, &theme_menu,
+-#ifdef HAVE_RECORDING
+-        &recording_settings,
+-#endif
+-#if CONFIG_RTC
+-        &timedate_item,
+-#endif
+-        &main_menu_config_item,
+-        &manage_settings,
++        &info_menu,
+         );
+ /*    MAIN MENU                    */
+ /***********************************/
+diff --git a/tools/asher/make_assets.py b/tools/asher/make_assets.py
+new file mode 100644
+index 0000000..5e0507f
+--- /dev/null
++++ b/tools/asher/make_assets.py
+@@ -0,0 +1,102 @@
++#!/usr/bin/env python3
++"""Generates Asher OS placeholder wallpapers (.awp), backdrops and theme cfgs."""
++import os, math, struct, sys
++import numpy as np
++from PIL import Image, ImageDraw, ImageFilter
++W,H,FR,MS=320,240,12,400
++OUT=sys.argv[1] if len(sys.argv)>1 else "asher_pkg"
++R=os.path.join(OUT,".rockbox","asher")
++for d in("themes","wallpaper","backdrops"): os.makedirs(os.path.join(R,d),exist_ok=True)
++
++def lerp(a,b,t): return tuple(int(a[i]+(b[i]-a[i])*t) for i in range(3))
++def sky(top,bot):
++    im=Image.new("RGB",(W,H)); d=ImageDraw.Draw(im)
++    for y in range(H): d.line([(0,y),(W,y)],fill=lerp(top,bot,y/H))
++    return im
++def town(d,col):
++    # anime-style neighbourhood silhouette + power poles and lines
++    x=0; import random; rnd=random.Random(7)
++    while x<W:
++        w=rnd.randint(28,50); h=rnd.randint(30,60)
++        d.rectangle([x,H-h,x+w,H],fill=col)
++        d.polygon([(x-3,H-h),(x+w//2,H-h-14),(x+w+3,H-h)],fill=col)
++        x+=w+rnd.randint(0,6)
++    for px in(50,170,290):
++        d.rectangle([px,120,px+3,H],fill=col)
++        d.line([(px-14,128),(px+18,128)],fill=col,width=2)
++    for y0 in(128,136):
++        pts=[(50+i*(240/20),y0+int(7*math.sin(i/20*math.pi*3+0*1))) for i in range(21)]
++        d.line([(50,y0),(170,y0+6),(290,y0)],fill=col,width=1)
++def disc(d,cx,cy,r,col): d.ellipse([cx-r,cy-r,cx+r,cy+r],fill=col)
++def moon(im,cx,cy,r,phase):
++    from PIL import ImageChops
++    bg=im.copy(); d=ImageDraw.Draw(im); disc(d,cx,cy,r,(240,240,215))
++    mask=Image.new("L",im.size,0); ImageDraw.Draw(mask).ellipse([cx-r,cy-r,cx+r,cy+r],fill=255)
++    if phase==4: return
++    if phase==0: im.paste(bg,mask=mask); d.ellipse([cx-r,cy-r,cx+r,cy+r],outline=(90,90,130)); return
++    k=[0,0.5,1.0,1.5,0,1.5,1.0,0.5][phase]      # shadow-disc offset in radii
++    sgn=-1 if phase<4 else 1                    # waxing lit right, waning lit left
++    off=int(k*r)*sgn
++    sh=Image.new("L",im.size,0); ImageDraw.Draw(sh).ellipse([cx-r+off,cy-r,cx+r+off,cy+r],fill=255)
++    im.paste(bg,mask=ImageChops.multiply(sh,mask))
++def scene(name,i,phase=4):
++    t=i/FR
++    if name=="sunrise":
++        im=sky(lerp((40,50,110),(255,150,100),t),lerp((255,170,110),(255,225,160),t)); d=ImageDraw.Draw(im)
++        disc(d,230,200-int(110*t),26,(255,230,150)); town(d,(30,25,55))
++    elif name=="sunup":
++        im=sky((90,170,255),(190,230,255)); d=ImageDraw.Draw(im)
++        disc(d,160+int(100*math.sin(t*math.pi*2)*0.0)+int(-60+120*t),50,24,(255,245,170)); town(d,(40,60,90))
++    elif name=="sunset":
++        im=sky(lerp((255,140,90),(60,40,110),t),lerp((255,200,120),(150,70,120),t)); d=ImageDraw.Draw(im)
++        disc(d,90,100+int(100*t),26,(255,190,110)); town(d,(35,20,50))
++    elif name=="moonrise":
++        im=sky((20,20,60),(70,50,110)); moon(im,230,210-int(110*t),22,phase); d=ImageDraw.Draw(im); town(d,(10,10,30))
++    elif name=="moonhigh":
++        im=sky((8,10,35),(30,30,80)); d=ImageDraw.Draw(im)
++        import random; rnd=random.Random(3)
++        for s in range(40):
++            a=1 if (s+i)%5 else 0; x,y=rnd.randint(0,W),rnd.randint(0,120)
++            if a: d.point((x,y),fill=(255,255,255))
++        moon(im,200,60,24,phase); d=ImageDraw.Draw(im); town(d,(6,6,20))
++    elif name=="glass":
++        im=sky((60,90,200),(170,110,230)); d=ImageDraw.Draw(im)
++        for k,(cx,cy,r,c) in enumerate([(70,70,60,(120,200,255)),(250,160,70,(200,140,255)),(160,200,50,(255,170,220))]):
++            ox=int(18*math.sin(t*2*math.pi+k*2)); oy=int(14*math.cos(t*2*math.pi+k))
++            disc(d,cx+ox,cy+oy,r,c)
++        im=im.filter(ImageFilter.GaussianBlur(22))
++    return im
++def rgb565(im):
++    a=np.asarray(im.convert("RGB"),dtype=np.uint16)
++    v=((a[...,0]>>3)<<11)|((a[...,1]>>2)<<5)|(a[...,2]>>3)
++    return v.astype("<u2").tobytes()
++def pack(fname,name,phase=4):
++    with open(os.path.join(R,"wallpaper",fname+".awp"),"wb") as f:
++        f.write(b"AWP1"+struct.pack("<HHHH",W,H,FR,MS))
++        for i in range(FR): f.write(rgb565(scene(name,i,phase)))
++for n in("sunrise","sunup","sunset","glass"): pack(n,n)
++for p in range(8):
++    pack(f"moonrise{p}","moonrise",p); pack(f"moonhigh{p}","moonhigh",p)
++# static first-frame backdrops (needed so the skin engine allocates a buffer)
++for n,sc in(("daybreak","sunup"),("glass","glass")):
++    scene(sc,0).save(os.path.join(R,"backdrops",n+".bmp"))
++Image.new("RGB",(W,H),(18,18,22)).save(os.path.join(R,"backdrops","dark.bmp"))
++cfg={
++"daybreak":("backdrop: /.rockbox/asher/backdrops/daybreak.bmp","FFFFFF","000000","4A90E2","FFFFFF"),
++"glass":("backdrop: /.rockbox/asher/backdrops/glass.bmp","FFFFFF","000000","FFFFFF","6A5AE0"),
++"dark":("backdrop: /.rockbox/asher/backdrops/dark.bmp","E6E6E6","121216","3A7BD5","FFFFFF"),
++"classic":("backdrop: -","000000","FFFFFF","3A7BD5","FFFFFF"),
++}
++for n,(bd,fg,bg,sel,selfg) in cfg.items():
++    open(os.path.join(R,"themes",n+".cfg"),"w").write(
++f"""{bd}
++foreground color: {fg}
++background color: {bg}
++line selector start color: {sel}
++line selector end color: {sel}
++line selector text color: {selfg}
++selector type: bar (color)
++show icons: off
++statusbar: top
++""")
++print("done")
