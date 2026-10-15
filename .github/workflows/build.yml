@@ -1,0 +1,49 @@
+name: Build Asher OS
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git wget curl bzip2 zip unzip texinfo bison flex automake autoconf libtool libncurses-dev libmpfr-dev libmpc-dev libgmp-dev zlib1g-dev libusb-dev libsdl1.2-dev python3 python3-pil python3-numpy
+      - name: Get Rockbox source and apply Asher OS patch
+        run: |
+          mkdir rockbox && cd rockbox
+          git init -q
+          git remote add origin https://github.com/Rockbox/rockbox.git
+          git fetch --depth 1 origin e5092187c5219056dbd2dde99f5cf55515a6d37d
+          git checkout -q FETCH_HEAD
+          git apply ../asher_os_source.patch
+      - name: Cache ARM compiler
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/cross
+          key: rbdev-arm-v1
+      - name: Build ARM compiler (first run only, takes a while)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd rockbox/tools
+          yes | RBDEV_PREFIX=$HOME/cross RBDEV_TARGET=a ./rockboxdev.sh
+      - name: Build Asher OS
+        run: |
+          export PATH=$HOME/cross/bin:$PATH
+          cd rockbox && mkdir build && cd build
+          ../tools/configure --target=ipod6g --type=n
+          make -j$(nproc)
+          make zip
+      - name: Make wallpapers and themes
+        run: python3 rockbox/tools/asher/make_assets.py assets
+      - name: Package
+        run: |
+          mkdir out
+          cp rockbox/build/rockbox.zip out/rockbox.zip
+          (cd assets && zip -qr ../out/asher_assets.zip .rockbox)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asher-os-install
+          path: out/
