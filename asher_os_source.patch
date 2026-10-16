@@ -15,10 +15,10 @@ index bb612b3..2b6122e 100644
  menus/radio_menu.c
 diff --git a/apps/asher/asher_stats.c b/apps/asher/asher_stats.c
 new file mode 100644
-index 0000000..d84638f
+index 0000000..5f0116e
 --- /dev/null
 +++ b/apps/asher/asher_stats.c
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,100 @@
 +#include <stdio.h>
 +#include <string.h>
 +#include "config.h"
@@ -31,6 +31,7 @@ index 0000000..d84638f
 +#include "metadata.h"
 +#include "playlist.h"
 +#include "powermgmt.h"
++#include "power.h"
 +#include "settings.h"
 +#include "splash.h"
 +#include "timefuncs.h"
@@ -49,7 +50,7 @@ index 0000000..d84638f
 +{
 +    splash(0, ID2P(LANG_WAIT));
 +    playlist_create(NULL, NULL);
-+    playlist_insert_directory(NULL, "/", PLAYLIST_INSERT_LAST, false, true);
++    playlist_insert_directory(NULL, "/", PLAYLIST_INSERT_LAST, false, true, NULL);
 +    if (playlist_amount() > 0)
 +    {
 +        playlist_shuffle(current_tick, -1);
