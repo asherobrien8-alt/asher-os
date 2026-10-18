@@ -1,8 +1,8 @@
 diff --git a/apps/SOURCES b/apps/SOURCES
-index bb612b38fb..1d10190b6f 100644
+index bb612b38fb..146b18a14f 100644
 --- a/apps/SOURCES
 +++ b/apps/SOURCES
-@@ -20,6 +20,17 @@ menu.c
+@@ -20,6 +20,18 @@ menu.c
  menus/menu_common.c
  menus/display_menu.c
  menus/theme_menu.c
@@ -17,15 +17,16 @@ index bb612b38fb..1d10190b6f 100644
 +asher/asher_nowplaying.c
 +asher/asher_boot.c
 +asher/asher_settings.c
++asher/asher_power.c
  menus/plugin_menu.c
  #if CONFIG_TUNER
  menus/radio_menu.c
 diff --git a/apps/asher/asher_boot.c b/apps/asher/asher_boot.c
 new file mode 100644
-index 0000000000..a489999fb7
+index 0000000000..372e19b3c1
 --- /dev/null
 +++ b/apps/asher/asher_boot.c
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,122 @@
 +/* Asher OS boot gate: after power-on the Asher OS logo stays up until the
 + * click wheel has been turned one full rotation. A bar fills as you turn
 + * and keeps its progress if you stop. Finishing plays a little chime. */
@@ -37,9 +38,10 @@ index 0000000000..a489999fb7
 +#include "button.h"
 +#include "misc.h"
 +#include "lcd.h"
-+#include "rockboxlogo.h"
++#include "bitmaps/rockboxlogo.h"
 +#include "asher_ui.h"
 +#include "asher_boot.h"
++#include "gui/viewport.h"
 +#if defined(IPOD_6G) && !defined(SIMULATOR)
 +#include "piezo.h"
 +#endif
@@ -49,6 +51,8 @@ index 0000000000..a489999fb7
 +#define BAR_H 10
 +#define BAR_X ((AUI_W - BAR_W) / 2)
 +#define BAR_Y 213
++
++static int boot_pending;
 +
 +static void chime(void)
 +{
@@ -97,6 +101,14 @@ index 0000000000..a489999fb7
 +    lcd_update();
 +}
 +
++/* redraw the plain logo (used while starting up, before the gate) */
++void asher_boot_logo(void)
++{
++    lcd_set_viewport(NULL);
++    lcd_bmp(&bm_rockboxlogo, (LCD_WIDTH - BMPWIDTH_rockboxlogo) / 2, 0);
++    lcd_update();
++}
++
 +void asher_boot_gate(void)
 +{
 +    int steps = 0;
@@ -124,24 +136,37 @@ index 0000000000..a489999fb7
 +    }
 +    chime();
 +    sleep(HZ / 4);
-+    aui_end();
++    /* keep the status bar switched off until the home screen has drawn
++     * itself (asher_boot_release), so it never flashes up in between */
++    boot_pending = 2;          /* the boot entry + this screen's entry */
++}
++
++void asher_boot_release(void)
++{
++    while (boot_pending > 0)
++    {
++        viewportmanager_theme_undo(SCREEN_MAIN, false);
++        boot_pending--;
++    }
 +}
 diff --git a/apps/asher/asher_boot.h b/apps/asher/asher_boot.h
 new file mode 100644
-index 0000000000..220a652560
+index 0000000000..376fc9b636
 --- /dev/null
 +++ b/apps/asher/asher_boot.h
-@@ -0,0 +1,4 @@
+@@ -0,0 +1,6 @@
 +#ifndef ASHER_BOOT_H
 +#define ASHER_BOOT_H
 +void asher_boot_gate(void);
++void asher_boot_logo(void);
++void asher_boot_release(void);   /* let the status bar back (after home draws) */
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
 new file mode 100644
-index 0000000000..e178b03a16
+index 0000000000..cd4c89df9b
 --- /dev/null
 +++ b/apps/asher/asher_home.c
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,168 @@
 +/* Asher OS home screen.
 + *  Bubbles / Dark: four glossy bubbles in an even 2x2 grid over the live
 + *  wallpaper. Turning right moves right, then wraps down to the first box
@@ -261,6 +286,7 @@ index 0000000000..e178b03a16
 +    while (1)
 +    {
 +        bool anim = asher_wp_animated() && aui_theme()->wallpaper;
++        if (aui_woke()) redraw = true;
 +        if (aui_screen_on())
 +        {
 +            int f = asher_wp_frame_no(), m = get_time()->tm_min;
@@ -323,10 +349,10 @@ index 0000000000..0f36b5cbaa
 +#endif
 diff --git a/apps/asher/asher_list.c b/apps/asher/asher_list.c
 new file mode 100644
-index 0000000000..4a4ae8bb6d
+index 0000000000..940fae0bfe
 --- /dev/null
 +++ b/apps/asher/asher_list.c
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,191 @@
 +/* Asher OS list screen: thick rounded selection bar, top bar with the
 + * clock, and accelerated scrolling with a first-letter bubble. */
 +#include <stdio.h>
@@ -459,6 +485,7 @@ index 0000000000..4a4ae8bb6d
 +    while (1)
 +    {
 +        bool show_letter = l->letter_jump && TIME_BEFORE(current_tick, letter_until);
++        if (aui_woke()) redraw = true;
 +        if (redraw)
 +        {
 +            aui_list_draw(l, show_letter ? first_letter(l) : 0);
@@ -554,10 +581,10 @@ index 0000000000..710e3d50ec
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000000..26ff132073
+index 0000000000..846ba7e70a
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,568 @@
+@@ -0,0 +1,921 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -566,6 +593,7 @@ index 0000000000..26ff132073
 +#include <string.h>
 +#include <ctype.h>
 +#include "config.h"
++#include "string-extra.h"
 +#include "system.h"
 +#include "kernel.h"
 +#include "action.h"
@@ -574,8 +602,11 @@ index 0000000000..26ff132073
 +#include "misc.h"
 +#include "menu.h"
 +#include "splash.h"
++#include "settings.h"
 +#include "playlist.h"
 +#include "tagcache.h"
++#include "dir.h"
++#include "file.h"
 +#include "core_alloc.h"
 +#include "timefuncs.h"
 +#include "root_menu.h"
@@ -635,13 +666,83 @@ index 0000000000..26ff132073
 +    return r ? r : strcasecmp(T(*(const int *)a), T(*(const int *)b));
 +}
 +
-+static long load_start;
++/* the spinning record player: call as often as you like while working,
++ * it only redraws when the animation moves on a frame */
++static long load_start, load_last;
++static int load_frame = -1;
 +static void loading_screen(const char *line1, const char *line2)
 +{
-+    if (!load_start || TIME_AFTER(current_tick, load_start + 60 * HZ))
-+        load_start = current_tick;
++    if (!load_start || TIME_AFTER(current_tick, load_last + HZ))
++        { load_start = current_tick; load_frame = -1; }
++    load_last = current_tick;
++    load_frame = (current_tick - load_start) / aui_loading_ticks(LDR_MUSIC);
 +    aui_loading(LDR_MUSIC, line1, line2, load_start, false);
 +}
++static void loading_tick(const char *line1, const char *line2)
++{
++    long f = (current_tick - load_start) / aui_loading_ticks(LDR_MUSIC);
++    if (TIME_AFTER(current_tick, load_last + HZ) || f != load_frame)
++        loading_screen(line1, line2);
++    else
++        load_last = current_tick;
++}
++
++bool asher_np_skip_intro;
++
++/* playback was started: keep the record player going until the song is
++ * actually loaded (at least a moment, so it never just flashes) */
++static int playback_started(void)
++{
++    long t0 = current_tick;
++    while (TIME_BEFORE(current_tick, t0 + HZ * 4)
++           && (TIME_BEFORE(current_tick, t0 + HZ * 7 / 10) || !audio_current_track()))
++    {
++        loading_tick("LOADING MUSIC", NULL);
++        sleep(1);
++    }
++    aui_end();
++    asher_np_skip_intro = true;
++    return GO_TO_WPS;
++}
++
++/* start the current playlist at 'start'; honours the Shuffle setting.
++ * force_shuffle: shuffle everything (the Shuffle item) */
++static int begin_play(int start, bool force_shuffle)
++{
++    if (force_shuffle && !global_settings.playlist_shuffle)
++    {
++        global_settings.playlist_shuffle = true;
++        settings_save();
++    }
++    if (global_settings.playlist_shuffle)
++    {
++        int r = playlist_shuffle(current_tick, force_shuffle ? -1 : start);
++        start = force_shuffle ? 0 : r;
++    }
++    playlist_start(start, 0, 0);
++    return playback_started();
++}
++
++/* turn shuffle on/off, also for what is playing right now */
++void asher_shuffle_set(bool on)
++{
++    struct playlist_info *pl = playlist_get_current();
++    global_settings.playlist_shuffle = on;
++    if (pl->started && (audio_status() & AUDIO_STATUS_PLAY))
++    {
++        if (on) playlist_randomise(pl, current_tick, true);
++        else    playlist_sort(pl, true);
++    }
++    settings_save();
++}
++
++static int shuffle_toggle_item(void)
++{
++    asher_shuffle_set(!global_settings.playlist_shuffle);
++    splash(HZ, global_settings.playlist_shuffle ? "Shuffle: On" : "Shuffle: Off");
++    return 0;
++}
++MENUITEM_FUNCTION(asher_shuffle_item, 0, "Shuffle", shuffle_toggle_item, NULL, Icon_NOICON);
 +
 +static bool lib_build(void)
 +{
@@ -697,6 +798,8 @@ index 0000000000..26ff132073
 +            loading_screen("LOADING LIBRARY", msg);
 +            yield();
 +        }
++        else if ((i & 7) == 0)
++            loading_tick("LOADING LIBRARY", NULL);
 +    }
 +    tagcache_search_finish(&tcs);
 +    lib_n = i;
@@ -771,13 +874,14 @@ index 0000000000..26ff132073
 +/* ------------------------------------------------------------------ */
 +static int play_entries(const int *order, int count, int start, bool shuffle)
 +{
++    /* shuffle = the Shuffle item: everything, in random order */
 +    struct tagcache_search tcs;
 +    struct playlist_insert_context ctx;
 +    static char path[MAX_PATH];
 +    int added = 0, newstart = 0;
 +
 +    if (count <= 0) return 0;
-+    const char *msg = shuffle ? "SHUFFLING" : "LOADING SONGS";
++    const char *msg = shuffle ? "SHUFFLING" : "LOADING MUSIC";
 +    aui_begin();
 +    loading_screen(msg, NULL);
 +    if (playlist_create(NULL, NULL) < 0 || !tagcache_search(&tcs, tag_filename))
@@ -792,15 +896,13 @@ index 0000000000..26ff132073
 +            if (k == start) newstart = added;
 +            added++;
 +        }
-+        if ((k & 127) == 0) loading_screen(msg, NULL);
++        if ((k & 15) == 0) loading_tick(msg, NULL);
 +    }
 +    playlist_insert_context_release(&ctx);
 +    tagcache_search_finish(&tcs);
-+    aui_end();
-+    if (added == 0) { splash(2 * HZ, "Couldn't load those songs"); return 0; }
-+    if (shuffle) { playlist_shuffle(current_tick, -1); newstart = 0; }
-+    playlist_start(newstart, 0, 0);
-+    return GO_TO_WPS;
++    if (added == 0) { aui_end(); splash(2 * HZ, "Couldn't load those songs"); return 0; }
++    loading_screen(msg, NULL);
++    return begin_play(newstart, shuffle);
 +}
 +
 +static int shuffle_all(void)
@@ -810,15 +912,11 @@ index 0000000000..26ff132073
 +    /* no database yet: shuffle every song on the disk */
 +    aui_begin();
 +    loading_screen("SHUFFLING", NULL);
-+    aui_end();
 +    playlist_create(NULL, NULL);
 +    playlist_insert_directory(NULL, "/", PLAYLIST_INSERT_LAST, false, true, NULL);
 +    if (playlist_amount() > 0)
-+    {
-+        playlist_shuffle(current_tick, -1);
-+        playlist_start(0, 0, 0);
-+        return GO_TO_WPS;
-+    }
++        return begin_play(0, true);
++    aui_end();
 +    splash(2 * HZ, "No songs found");
 +    return 0;
 +}
@@ -1021,6 +1119,7 @@ index 0000000000..26ff132073
 +    aui_begin();
 +    while (1)
 +    {
++        if (aui_woke()) redraw = true;
 +        if (redraw) { draw_search(q, letter, in_results, rsel, rtop); redraw = false; }
 +        int a = search_action(HZ);
 +        size_t len = strlen(q);
@@ -1079,10 +1178,275 @@ index 0000000000..26ff132073
 +    }
 +}
 +
++
++/* ------------------------------------------------------------------ */
++/* playlists: playlist files and plain folders of songs in /Playlists  */
++/* ------------------------------------------------------------------ */
++#define PL_DIR "/Playlists"
++#define MAX_PL 200
++/* every place someone might drop their playlist folders */
++static const char *pl_dirs[] = { "/Playlists", "/Playlist", "/Music/Playlists", "/Music/Playlist" };
++struct plent { char name[80]; char path[MAX_PATH]; char kind; };   /* d=folder p=file l=loose */
++static struct plent pls[MAX_PL];
++static int npls;
++
++static int pl_cmp(const void *a, const void *b)
++{
++    const struct plent *x = a, *y = b;
++    if ((x->kind == 'l') != (y->kind == 'l')) return x->kind == 'l' ? 1 : -1;
++    return strcasecmp(x->name, y->name);
++}
++
++static bool has_ext(const char *n, const char *const *exts)
++{
++    const char *e = strrchr(n, '.');
++    if (!e) return false;
++    for (int i = 0; exts[i]; i++)
++        if (!strcasecmp(e, exts[i])) return true;
++    return false;
++}
++static const char *const pl_exts[] = { ".m3u", ".m3u8", NULL };
++static const char *const audio_exts[] = { ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus",
++                                          ".wav", ".wma", ".aiff", ".ape", ".wv", ".mpc", NULL };
++
++static void pl_scan(void)
++{
++    npls = 0;
++    for (unsigned k = 0; k < sizeof(pl_dirs) / sizeof(pl_dirs[0]); k++)
++    {
++        DIR *d = opendir(pl_dirs[k]);
++        struct dirent *ent;
++        bool loose = false;
++        if (!d) continue;
++        while (npls < MAX_PL - 1 && (ent = readdir(d)))
++        {
++            if (ent->d_name[0] == '.') continue;
++            bool isdir = dir_get_info(d, ent).attribute & ATTR_DIRECTORY;
++            if (!isdir && !has_ext(ent->d_name, pl_exts))
++            {
++                if (has_ext(ent->d_name, audio_exts)) loose = true;
++                continue;
++            }
++            strlcpy(pls[npls].name, ent->d_name, sizeof(pls[npls].name));
++            snprintf(pls[npls].path, sizeof(pls[npls].path), "%s/%s", pl_dirs[k], ent->d_name);
++            pls[npls].kind = isdir ? 'd' : 'p';
++            npls++;
++        }
++        closedir(d);
++        if (loose && npls < MAX_PL)          /* songs dropped straight in */
++        {
++            strlcpy(pls[npls].name, "Songs in the Playlists folder", sizeof(pls[npls].name));
++            strlcpy(pls[npls].path, pl_dirs[k], sizeof(pls[npls].path));
++            pls[npls].kind = 'l';
++            npls++;
++        }
++    }
++    qsort(pls, npls, sizeof(pls[0]), pl_cmp);
++}
++
++static void pl_get(struct aui_list *l, int i, char *buf, size_t n, char *sub, size_t subn)
++{
++    (void)l;
++    strlcpy(buf, pls[i].name, n);
++    if (pls[i].kind == 'p')
++    {
++        char *e = strrchr(buf, '.');
++        if (e) *e = '\0';
++    }
++    if (sub) strlcpy(sub, pls[i].kind == 'p' ? "Playlist" : "Folder of songs", subn);
++}
++
++/* ---- the songs inside one playlist (folder, .m3u or loose songs) ---- */
++#define FS_MAX   4000
++#define FS_POOL  (448 * 1024)
++static int fs_handle = -1;
++static int fs_n;
++static uint32_t *fs_off;
++static char *fs_pool;
++static size_t fs_used;
++static bool fs_full;
++
++static void fs_free(void)
++{
++    if (fs_handle > 0) { core_unpin(fs_handle); core_free(fs_handle); }
++    fs_handle = -1;
++    fs_n = 0;
++}
++
++static bool fs_alloc(void)
++{
++    fs_free();
++    fs_handle = core_alloc(FS_MAX * sizeof(uint32_t) + FS_POOL);
++    if (fs_handle <= 0) { fs_handle = -1; return false; }
++    fs_off = core_get_data_pinned(fs_handle);      /* pinned while in use */
++    fs_pool = (char *)(fs_off + FS_MAX);
++    fs_used = 0;
++    fs_full = false;
++    return true;
++}
++
++static void fs_add(const char *path)
++{
++    size_t len = strlen(path) + 1;
++    if (fs_n >= FS_MAX || fs_used + len > FS_POOL) { fs_full = true; return; }
++    memcpy(fs_pool + fs_used, path, len);
++    fs_off[fs_n++] = fs_used;
++    fs_used += len;
++}
++static const char *FS(int i) { return fs_pool + fs_off[i]; }
++
++static int fs_cmp(const void *a, const void *b)
++{
++    return strcasecmp(fs_pool + *(const uint32_t *)a, fs_pool + *(const uint32_t *)b);
++}
++
++/* every song in a folder (and the folders inside it, a few levels deep) */
++static void fs_scan(char *path, size_t cap, int depth)
++{
++    DIR *d = opendir(path);
++    struct dirent *ent;
++    size_t base = strlen(path);
++    if (!d) return;
++    while (!fs_full && (ent = readdir(d)))
++    {
++        if (ent->d_name[0] == '.') continue;
++        bool isdir = dir_get_info(d, ent).attribute & ATTR_DIRECTORY;
++        if (base + 1 + strlen(ent->d_name) + 1 > cap) continue;
++        snprintf(path + base, cap - base, "/%s", ent->d_name);
++        if (isdir)
++        {
++            if (depth > 0) fs_scan(path, cap, depth - 1);
++        }
++        else if (has_ext(ent->d_name, audio_exts))
++            fs_add(path);
++        path[base] = '\0';
++        if ((fs_n & 15) == 0) loading_tick("OPENING PLAYLIST", NULL);
++    }
++    closedir(d);
++}
++
++/* the songs listed in an .m3u / .m3u8 file */
++static void fs_read_m3u(const char *file)
++{
++    char line[MAX_PATH], full[MAX_PATH], dir[MAX_PATH];
++    int fd = open(file, O_RDONLY);
++    if (fd < 0) return;
++    strlcpy(dir, file, sizeof(dir));
++    char *sl = strrchr(dir, '/');
++    if (sl) *sl = '\0';
++    while (!fs_full && read_line(fd, line, sizeof(line)) > 0)
++    {
++        char *p = line;
++        if (!strncmp(p, "\xef\xbb\xbf", 3)) p += 3;      /* UTF-8 marker */
++        while (*p == ' ' || *p == '\t') p++;
++        size_t len = strlen(p);
++        while (len && (p[len - 1] == '\r' || p[len - 1] == ' ')) p[--len] = '\0';
++        if (!len || *p == '#') continue;
++        for (char *c = p; *c; c++) if (*c == '\\') *c = '/';
++        if (p[1] == ':') continue;                   /* a Windows path, not on the iPod */
++        if (*p == '/') strlcpy(full, p, sizeof(full));
++        else snprintf(full, sizeof(full), "%s/%s", dir, p);
++        if (file_exists(full)) fs_add(full);
++        if ((fs_n & 15) == 0) loading_tick("OPENING PLAYLIST", NULL);
++    }
++    close(fd);
++}
++
++static void fs_get(struct aui_list *l, int i, char *buf, size_t n, char *sub, size_t subn)
++{
++    (void)l; (void)sub; (void)subn;
++    if (i == 0) { strlcpy(buf, "Shuffle Songs", n); return; }
++    const char *path = FS(i - 1);
++    const char *b = strrchr(path, '/');
++    strlcpy(buf, b ? b + 1 : path, n);
++    char *dot = strrchr(buf, '.');
++    if (dot && dot != buf) *dot = '\0';
++}
++
++/* play the playlist's songs, starting with song 'start' (-1 = shuffle all) */
++static int fs_play(int start)
++{
++    struct playlist_insert_context ctx;
++    aui_begin();
++    loading_screen("LOADING MUSIC", NULL);
++    if (playlist_create(NULL, NULL) < 0
++        || playlist_insert_context_create(NULL, &ctx, PLAYLIST_INSERT_LAST, false, false) < 0)
++        { aui_end(); splash(2 * HZ, "Couldn't load those songs"); return 0; }
++    for (int k = 0; k < fs_n; k++)
++    {
++        playlist_insert_context_add(&ctx, FS(k));
++        if ((k & 15) == 0) loading_tick("LOADING MUSIC", NULL);
++    }
++    playlist_insert_context_release(&ctx);
++    if (playlist_amount() <= 0)
++        { aui_end(); splash(2 * HZ, "Couldn't load those songs"); return 0; }
++    return begin_play(start < 0 ? 0 : start, start < 0);
++}
++
++static int fs_select(struct aui_list *l, int i)
++{
++    (void)l;
++    return fs_play(i - 1);
++}
++
++static int pl_select(struct aui_list *l, int i)
++{
++    (void)l;
++    char path[MAX_PATH];
++    int r = 0;
++    if (!fs_alloc()) { splash(2 * HZ, "Not enough memory"); return 0; }
++    aui_begin();
++    loading_screen("OPENING PLAYLIST", NULL);
++    if (pls[i].kind == 'p')
++        fs_read_m3u(pls[i].path);
++    else
++    {
++        strlcpy(path, pls[i].path, sizeof(path));
++        if (pls[i].kind == 'd')
++            fs_scan(path, sizeof(path), 4);
++        else
++        {
++            /* loose songs: only the files right in the folder */
++            fs_scan(path, sizeof(path), 0);
++        }
++        qsort(fs_off, fs_n, sizeof(uint32_t), fs_cmp);
++    }
++    if (fs_n == 0)
++        splash(2 * HZ, "No songs in there");
++    else
++    {
++        char title[80];
++        struct aui_list sl = { 0 };
++        pl_get(l, i, title, sizeof(title), NULL, 0);
++        sl.title = title; sl.count = fs_n + 1;
++        sl.letter_jump = fs_n > 40 && pls[i].kind != 'p';
++        sl.get = fs_get; sl.select = fs_select;
++        r = aui_list_run(&sl);
++    }
++    aui_end();
++    fs_free();
++    return r > 0 ? r : 0;
++}
++
++static int playlists(void)
++{
++    struct aui_list l = { 0 };
++    pl_scan();
++    if (npls == 0)
++    {
++        if (!dir_exists(PL_DIR)) mkdir(PL_DIR);
++        splash(3 * HZ, "No playlists yet\nCopy folders of songs into\nthe Playlists folder");
++        return 0;
++    }
++    l.title = "Playlists"; l.count = npls; l.two_line = true; l.chevrons = true;
++    l.letter_jump = npls > 40; l.get = pl_get; l.select = pl_select;
++    return aui_list_run(&l);
++}
++
 +/* ------------------------------------------------------------------ */
 +/* Music menu                                                          */
 +/* ------------------------------------------------------------------ */
-+static const char *music_items[] = { "Search", "Artists", "Playlists", "Shuffle", "All Songs" };
++static const char *music_items[] = { "Playlists", "Shuffle", "All Songs", "Search", "Artists" };
 +
 +static void music_get(struct aui_list *l, int i, char *buf, size_t n, char *sub, size_t subn)
 +{
@@ -1095,22 +1459,38 @@ index 0000000000..26ff132073
 +    (void)l;
 +    switch (i)
 +    {
-+        case 0: return library_ready() ? search() : 0;
-+        case 1: return library_ready() ? artists() : 0;
-+        case 2: return GO_TO_PLAYLISTS_SCREEN;
-+        case 3: return shuffle_all();
-+        case 4: return library_ready() ? songs_list("All Songs", by_title, lib_n) : 0;
++        case 0: return playlists();
++        case 1: return shuffle_all();
++        case 2: return library_ready() ? songs_list("All Songs", by_title, lib_n) : 0;
++        case 3: return library_ready() ? search() : 0;
++        case 4: return library_ready() ? artists() : 0;
 +    }
 +    return 0;
++}
++
++/* a short spin of the record player on the way into Music */
++static void music_intro(void)
++{
++    long t0 = current_tick;
++    if (!aui_screen_on()) return;
++    load_last = 0; load_start = 0;
++    while (TIME_BEFORE(current_tick, t0 + HZ * 6 / 5))
++    {
++        loading_tick("LOADING MUSIC", NULL);
++        if (get_action(CONTEXT_STD, 1) != ACTION_NONE) break;   /* any button skips */
++    }
 +}
 +
 +int asher_music(void)
 +{
 +    static int sel = 0;
 +    struct aui_list l = { 0 };
++    aui_begin();            /* held across the intro so nothing flashes between */
++    music_intro();
 +    l.title = "Music"; l.count = 5; l.chevrons = true;
 +    l.get = music_get; l.select = music_select; l.sel = sel;
 +    int r = aui_list_run(&l);
++    aui_end();
 +    sel = l.sel;
 +    return r;
 +}
@@ -1128,28 +1508,34 @@ index 0000000000..26ff132073
 +                  library_rebuild, NULL, Icon_NOICON);
 diff --git a/apps/asher/asher_music.h b/apps/asher/asher_music.h
 new file mode 100644
-index 0000000000..112c4544a4
+index 0000000000..09d6b93dee
 --- /dev/null
 +++ b/apps/asher/asher_music.h
-@@ -0,0 +1,7 @@
+@@ -0,0 +1,12 @@
 +#ifndef ASHER_MUSIC_H
 +#define ASHER_MUSIC_H
++#include <stdbool.h>
 +#include "menu.h"
 +int asher_music(void);                         /* Music menu; GO_TO_* or 0 */
 +int asher_nowplaying(void);                    /* custom Now Playing screen */
++void asher_resume_paused(void);                /* load the last song, paused */
++void asher_shuffle_set(bool on);               /* shuffle on/off (also what's playing) */
++extern bool asher_np_skip_intro;               /* music just loaded: no NP intro */
 +extern const struct menu_item_ex asher_library_item;   /* Settings entry */
++extern const struct menu_item_ex asher_shuffle_item;   /* Settings entry */
 +#endif
 diff --git a/apps/asher/asher_nowplaying.c b/apps/asher/asher_nowplaying.c
 new file mode 100644
-index 0000000000..3ab7519a38
+index 0000000000..b35577f020
 --- /dev/null
 +++ b/apps/asher/asher_nowplaying.c
-@@ -0,0 +1,248 @@
+@@ -0,0 +1,289 @@
 +/* Asher OS Now Playing: album art, song + artist, play/pause status,
 + * kbps, elapsed / total time, over the live wallpaper. */
 +#include <stdio.h>
 +#include <string.h>
 +#include "config.h"
++#include "string-extra.h"
 +#include "system.h"
 +#include "kernel.h"
 +#include "action.h"
@@ -1160,6 +1546,7 @@ index 0000000000..3ab7519a38
 +#include "timefuncs.h"
 +#include "root_menu.h"
 +#include "gui/wps.h"
++#include "playlist.h"
 +#include "asher_ui.h"
 +#include "asher_music.h"
 +#include "asher_wallpaper.h"
@@ -1196,7 +1583,7 @@ index 0000000000..3ab7519a38
 +    strlcpy(l2, s + best, n);
 +}
 +
-+static void draw(bool seeking, long seek_pos, bool show_vol)
++static void draw(bool seeking, long seek_pos, bool show_vol, bool show_shuf)
 +{
 +    const struct aui_theme *t = aui_theme();
 +    struct mp3entry *id3 = audio_current_track();
@@ -1224,7 +1611,9 @@ index 0000000000..3ab7519a38
 +    }
 +
 +    /* progress or volume */
-+    if (show_vol)
++    if (show_shuf)
++        ;
++    else if (show_vol)
 +        aui_progress(ART_X, 188, AUI_W - 2 * ART_X, 8, aui_volume_pct(), 100);
 +    else if (playing)
 +        aui_progress(ART_X, 188, AUI_W - 2 * ART_X, 8, pos, len);
@@ -1249,6 +1638,9 @@ index 0000000000..3ab7519a38
 +            snprintf(buf, sizeof(buf), "%d kbps", id3->bitrate);
 +            aui_text(AF_SMALLR, COL_X, ART_Y + ART - 14, sc, buf, COL_W, 0);
 +        }
++        aui_text(AF_SMALLR, COL_X, ART_Y + ART - 30,
++                 global_settings.playlist_shuffle ? (glass ? 0x9fd8ff : t->accent) : sc,
++                 global_settings.playlist_shuffle ? "Shuffle On" : "Shuffle Off", COL_W, 0);
 +    }
 +    else
 +    {
@@ -1257,7 +1649,10 @@ index 0000000000..3ab7519a38
 +        aui_text(AF_SMALLR, COL_X, ART_Y + 48, sc, "Pick something in Music", COL_W, 0);
 +    }
 +
-+    if (show_vol)
++    if (show_shuf)
++        aui_text(AF_SMALL, AUI_W / 2, 202, tc,
++                 global_settings.playlist_shuffle ? "Shuffle On" : "Shuffle Off", 200, 1);
++    else if (show_vol)
 +    {
 +        snprintf(buf, sizeof(buf), "Volume %d%%", aui_volume_pct());
 +        aui_text(AF_SMALL, AUI_W / 2, 202, tc, buf, 200, 1);
@@ -1271,6 +1666,26 @@ index 0000000000..3ab7519a38
 +    }
 +    aui_topbar_text("Now Playing");
 +    aui_update();
++}
++
++/* nothing playing (e.g. after a reboot): load the last song but keep it
++ * paused, so Now Playing and Stats can show what's queued up */
++void asher_resume_paused(void)
++{
++    if (audio_status() || global_status.resume_index == -1)
++        return;
++    if (playlist_resume() != -1)
++    {
++        playlist_resume_track(global_status.resume_index,
++            global_status.resume_crc32,
++            global_status.resume_elapsed,
++            global_status.resume_offset);
++        audio_pause();
++        get_wps_state()->paused = true;
++        /* give playback a moment to read the track's info and art */
++        for (int i = 0; i < 20 && !audio_current_track(); i++)
++            sleep(HZ / 20);
++    }
 +}
 +
 +static void play_pause(void)
@@ -1291,18 +1706,21 @@ index 0000000000..3ab7519a38
 +int asher_nowplaying(void)
 +{
 +    bool seeking = false, was_playing = false;
-+    long seek_pos = 0, step = 1000, vol_until = 0, next_text = 0;
++    long seek_pos = 0, step = 1000, vol_until = 0, shuf_until = 0, next_text = 0;
 +    int frame = -1;
 +
 +    aui_begin();
-+    aui_intro(LDR_NP);
++    if (asher_np_skip_intro) asher_np_skip_intro = false;   /* the record player just played */
++    else aui_intro(LDR_NP);
 +    while (1)
 +    {
 +        struct mp3entry *id3 = audio_current_track();
 +        int st = audio_status();
 +        bool on = aui_screen_on();
++        if (aui_woke()) next_text = 0;
 +        bool anim = asher_wp_animated() && aui_theme()->wallpaper;
 +        bool show_vol = TIME_BEFORE(current_tick, vol_until);
++        bool show_shuf = TIME_BEFORE(current_tick, shuf_until);
 +
 +        if (st & AUDIO_STATUS_PLAY) was_playing = true;
 +        else if (was_playing) break;           /* playlist finished */
@@ -1312,7 +1730,7 @@ index 0000000000..3ab7519a38
 +            int f = asher_wp_frame_no();
 +            if (TIME_AFTER(current_tick, next_text) || (anim && f != frame))
 +            {
-+                draw(seeking, seek_pos, show_vol);
++                draw(seeking, seek_pos, show_vol, show_shuf);
 +                frame = f;
 +                next_text = current_tick + (seeking ? HZ / 10 : HZ / 2);
 +            }
@@ -1376,6 +1794,13 @@ index 0000000000..3ab7519a38
 +                adjust_volume(a == ACTION_WPS_VOLUP ? 1 : -1);
 +                setvol();
 +                vol_until = current_tick + HZ * 3 / 2;
++                shuf_until = 0;
++                next_text = 0;
++                break;
++            case ACTION_WPS_BROWSE:            /* centre button: shuffle on/off */
++                asher_shuffle_set(!global_settings.playlist_shuffle);
++                shuf_until = current_tick + HZ * 3 / 2;
++                vol_until = 0;
 +                next_text = 0;
 +                break;
 +            case ACTION_WPS_MENU:
@@ -1383,6 +1808,7 @@ index 0000000000..3ab7519a38
 +                return GO_TO_PREVIOUS;
 +            case ACTION_NONE:
 +                if (!show_vol && vol_until) { vol_until = 0; next_text = 0; }
++                if (!show_shuf && shuf_until) { shuf_until = 0; next_text = 0; }
 +                break;
 +            default:
 +                if (default_event_handler(a) == SYS_USB_CONNECTED)
@@ -1393,12 +1819,138 @@ index 0000000000..3ab7519a38
 +    aui_end();
 +    return GO_TO_PREVIOUS;
 +}
+diff --git a/apps/asher/asher_power.c b/apps/asher/asher_power.c
+new file mode 100644
+index 0000000000..142e0ec3bf
+--- /dev/null
++++ b/apps/asher/asher_power.c
+@@ -0,0 +1,108 @@
++/* Asher OS shut down pop-up: a retro pixel box that counts down to power
++ * off. Pressing Menu during the countdown cancels it. */
++#include <stdio.h>
++#include <string.h>
++#include "config.h"
++#include "system.h"
++#include "kernel.h"
++#include "button.h"
++#include "lcd.h"
++#include "backlight.h"
++#include "gui/viewport.h"
++#include "asher_ui.h"
++#include "asher_power.h"
++
++#define SECS  3
++#define BOX_W 236
++#define BOX_H 112
++#define BOX_X ((LCD_WIDTH - BOX_W) / 2)
++#define BOX_Y ((LCD_HEIGHT - BOX_H) / 2)
++
++#define C_BOX   LCD_RGBPACK(29, 56, 77)
++#define C_EDGE  LCD_RGBPACK(19, 240, 140)
++#define C_DIM   LCD_RGBPACK(14, 120, 80)
++#define T_GREEN 0x13f08c
++#define T_DIM   0x8fd8b8
++
++static void box(int secs_left, int ticks_left, bool bye)
++{
++    char buf[32];
++    lcd_set_viewport(NULL);
++    lcd_set_drawmode(DRMODE_SOLID);
++    /* shadow, body, double pixel border */
++    lcd_set_foreground(LCD_RGBPACK(0, 0, 0));
++    lcd_fillrect(BOX_X + 4, BOX_Y + 4, BOX_W, BOX_H);
++    lcd_set_foreground(C_BOX);
++    lcd_fillrect(BOX_X, BOX_Y, BOX_W, BOX_H);
++    lcd_set_foreground(C_EDGE);
++    lcd_drawrect(BOX_X, BOX_Y, BOX_W, BOX_H);
++    lcd_drawrect(BOX_X + 1, BOX_Y + 1, BOX_W - 2, BOX_H - 2);
++    lcd_drawrect(BOX_X + 4, BOX_Y + 4, BOX_W - 8, BOX_H - 8);
++
++    aui_text(AF_RETRO, LCD_WIDTH / 2, BOX_Y + 14, T_GREEN, "SHUTTING DOWN", BOX_W - 16, 1);
++    if (bye)
++        aui_text(AF_RETRO, LCD_WIDTH / 2, BOX_Y + 44, T_GREEN, "GOODBYE", BOX_W - 16, 1);
++    else
++    {
++        snprintf(buf, sizeof(buf), "power off in %d", secs_left);
++        aui_text(AF_RETRO, LCD_WIDTH / 2, BOX_Y + 44, T_GREEN, buf, BOX_W - 16, 1);
++    }
++
++    /* chunky bar that empties as the countdown runs out */
++    int bx = BOX_X + 18, bw = BOX_W - 36, by = BOX_Y + 74;
++    lcd_set_drawmode(DRMODE_SOLID);
++    lcd_set_foreground(C_DIM);
++    lcd_drawrect(bx, by, bw, 10);
++    int fill = bye ? 0 : (bw - 4) * ticks_left / (SECS * HZ);
++    lcd_set_foreground(C_EDGE);
++    for (int x = 0; x < fill; x += 6)
++        lcd_fillrect(bx + 2 + x, by + 2, MIN(4, fill - x), 6);
++
++    if (!bye)
++        aui_text(AF_RETRO_S, LCD_WIDTH / 2, BOX_Y + 92, T_DIM, "press menu to cancel", BOX_W - 16, 1);
++    lcd_set_drawmode(DRMODE_SOLID);
++    lcd_update_rect(BOX_X, BOX_Y, BOX_W + 4, BOX_H + 4);
++}
++
++bool asher_shutdown_countdown(void)
++{
++    long end = current_tick + SECS * HZ;
++    bool go = true;
++
++    aui_init();
++    viewportmanager_theme_enable(SCREEN_MAIN, false, NULL);
++    backlight_on();
++    button_clear_queue();
++    while (TIME_BEFORE(current_tick, end))
++    {
++        long left = end - current_tick;
++        box((int)((left + HZ - 1) / HZ), (int)left, false);
++        long btn = button_get_w_tmo(HZ / 10);
++        if (btn != BUTTON_NONE && !(btn & SYS_EVENT))
++        {
++            backlight_on();
++#ifdef BUTTON_MENU
++            if ((btn & BUTTON_MENU) && !(btn & (BUTTON_REL | BUTTON_REPEAT)))
++            {
++                go = false;
++                break;
++            }
++#endif
++        }
++    }
++    if (go)
++    {
++        box(0, 0, true);                 /* stays up while things are saved */
++        return true;                     /* the bar stays off (see below) */
++    }
++    viewportmanager_theme_undo(SCREEN_MAIN, true);
++    aui_dirty = true;
++    return false;
++}
++
++/* shutting down was stopped after the countdown (e.g. database busy) */
++void asher_shutdown_aborted(void)
++{
++    viewportmanager_theme_undo(SCREEN_MAIN, true);
++    aui_dirty = true;
++}
+diff --git a/apps/asher/asher_power.h b/apps/asher/asher_power.h
+new file mode 100644
+index 0000000000..a22315f7c8
+--- /dev/null
++++ b/apps/asher/asher_power.h
+@@ -0,0 +1,6 @@
++#ifndef ASHER_POWER_H
++#define ASHER_POWER_H
++#include <stdbool.h>
++bool asher_shutdown_countdown(void);   /* false = the user cancelled */
++void asher_shutdown_aborted(void);     /* undo after a later cancel */
++#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..ed28635245
+index 0000000000..4a8a564529
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,115 @@
 +/* Asher OS settings extras: click wheel sound toggle and the version screen. */
 +#include <stdio.h>
 +#include <string.h>
@@ -1413,16 +1965,17 @@ index 0000000000..ed28635245
 +#include "powermgmt.h"
 +#include "tagcache.h"
 +#include "mv.h"
++#include "backlight.h"
 +#include "asher_ui.h"
 +#include "asher_settings.h"
 +
-+#define ASHER_OS_VERSION "1.2"
++#define ASHER_OS_VERSION "1.4"
 +
 +static int click_toggle(void)
 +{
 +#ifdef HAVE_HARDWARE_CLICK
 +    global_settings.keyclick_hardware = !global_settings.keyclick_hardware;
-+    global_settings.keyclick_repeats = true;
++    global_settings.keyclick_repeats = false;   /* holding buttons clicks once */
 +    settings_save();
 +    splash(HZ, global_settings.keyclick_hardware ? "Click Wheel Sound: On"
 +                                                 : "Click Wheel Sound: Off");
@@ -1485,29 +2038,59 @@ index 0000000000..ed28635245
 +    return 0;
 +}
 +MENUITEM_FUNCTION(asher_version_item, 0, "Asher OS Version", version_screen, NULL, Icon_NOICON);
++
++/* Screen Off Timer: 5..30 seconds or Never */
++static int set_screen_off(void *p)
++{
++    int secs = (int)(intptr_t)p;            /* 0 = never turn off */
++    global_settings.backlight_timeout = secs;
++    backlight_set_timeout(secs);
++#if CONFIG_CHARGING
++    global_settings.backlight_timeout_plugged = secs;
++    backlight_set_timeout_plugged(secs);
++#endif
++    settings_save();
++    if (secs) splashf(HZ, "Screen turns off after %d seconds", secs);
++    else      splash(HZ, "Screen stays on");
++    return 0;
++}
++#define SOI(n, label, secs) \
++    MENUITEM_FUNCTION_W_PARAM(soi##n, MENU_EXITAFTERTHISMENU, label, \
++                              set_screen_off, (void *)(intptr_t)(secs), NULL, Icon_NOICON)
++SOI(0, "5 seconds", 5);
++SOI(1, "10 seconds", 10);
++SOI(2, "15 seconds", 15);
++SOI(3, "20 seconds", 20);
++SOI(4, "25 seconds", 25);
++SOI(5, "30 seconds", 30);
++SOI(6, "Never", 0);
++MAKE_MENU(asher_screen_off_menu, "Screen Off Timer", NULL, Icon_NOICON,
++          &soi0, &soi1, &soi2, &soi3, &soi4, &soi5, &soi6);
 diff --git a/apps/asher/asher_settings.h b/apps/asher/asher_settings.h
 new file mode 100644
-index 0000000000..751bd86db4
+index 0000000000..5e569f25d1
 --- /dev/null
 +++ b/apps/asher/asher_settings.h
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,7 @@
 +#ifndef ASHER_SETTINGS_H
 +#define ASHER_SETTINGS_H
 +#include "menu.h"
 +extern const struct menu_item_ex asher_click_item;
 +extern const struct menu_item_ex asher_version_item;
++extern const struct menu_item_ex asher_screen_off_menu;
 +#endif
 diff --git a/apps/asher/asher_stats.c b/apps/asher/asher_stats.c
 new file mode 100644
-index 0000000000..74979441be
+index 0000000000..805781628a
 --- /dev/null
 +++ b/apps/asher/asher_stats.c
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,161 @@
 +/* Asher OS Stats screen, laid out as retro desktop windows:
 + * album_art.jpg, wallpaper.gif (live), now_playing.txt and moon.jpeg. */
 +#include <stdio.h>
 +#include <string.h>
 +#include "config.h"
++#include "string-extra.h"
 +#include "system.h"
 +#include "kernel.h"
 +#include "action.h"
@@ -1515,7 +2098,9 @@ index 0000000000..74979441be
 +#include "misc.h"
 +#include "metadata.h"
 +#include "timefuncs.h"
++#include "settings.h"
 +#include "asher_ui.h"
++#include "asher_music.h"
 +#include "asher_stats.h"
 +#include "asher_theme.h"
 +#include "asher_wallpaper.h"
@@ -1554,8 +2139,11 @@ index 0000000000..74979441be
 +    bool paused = st & AUDIO_STATUS_PAUSE;
 +    char buf[160], b2[16];
 +    struct tm *tm = get_time();
-+    int ph = asher_moon_phase(tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
++    int ph = asher_moon_phase(tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
++                              tm->tm_hour, tm->tm_min);
 +    const char *wname = asher_wallpaper_name();
++
++    asher_wp_prepare();         /* may show the loading screen first */
 +
 +    if (!aui_sprite(SPR_STATS_BG, 0, 0))
 +        aui_vgrad(0, 0, AUI_W, AUI_H, 0xffd6f6, 0xa6baff);
@@ -1612,6 +2200,10 @@ index 0000000000..74979441be
 +        aui_text(AF_RETRO_S, INFO_X + 5, INFO_Y + 17, C_SUB, "> nothing playing", 180, 0);
 +        aui_text(AF_SMALL, INFO_X + 5, INFO_Y + 30, C_TEXT, "Pick something in Music", 188, 0);
 +    }
++    /* shuffle state in the now_playing.txt title bar (centre button flips it) */
++    aui_text(AF_RETRO_S, INFO_X + 166, INFO_Y + 2,
++             global_settings.playlist_shuffle ? C_PLAY : C_SUB,
++             global_settings.playlist_shuffle ? "shuffle:on" : "shuffle:off", 76, 2);
 +    aui_text(AF_RETRO_S, MOON_X + 44, MOON_Y + 22, C_TEXT, moon_l1[ph], 56, 0);
 +    aui_text(AF_RETRO_S, MOON_X + 44, MOON_Y + 34, C_TEXT, moon_l2[ph], 56, 0);
 +    aui_topbar_text("Stats");
@@ -1622,12 +2214,14 @@ index 0000000000..74979441be
 +{
 +    long next_text = 0;
 +    int frame = -1;
++    asher_resume_paused();      /* show the paused song, not "nothing playing" */
 +    aui_begin();
 +    aui_intro(LDR_STATS);
 +    while (1)
 +    {
 +        bool on = aui_screen_on();
 +        bool anim = asher_wp_animated();
++        if (aui_woke()) next_text = 0;
 +        if (on)
 +        {
 +            int f = asher_wp_frame_no();
@@ -1639,8 +2233,14 @@ index 0000000000..74979441be
 +            }
 +        }
 +        int action = get_action(CONTEXT_STD, (on && anim) ? asher_wp_frame_ticks() : HZ / 2);
-+        if (action == ACTION_STD_CANCEL || action == ACTION_STD_MENU || action == ACTION_STD_OK)
++        if (action == ACTION_STD_CANCEL || action == ACTION_STD_MENU)
 +            break;
++        if (action == ACTION_STD_OK)        /* centre button: shuffle on/off */
++        {
++            asher_shuffle_set(!global_settings.playlist_shuffle);
++            next_text = 0;
++            continue;
++        }
 +        if (action != ACTION_NONE && default_event_handler(action) == SYS_USB_CONNECTED)
 +            break;
 +    }
@@ -1658,19 +2258,25 @@ index 0000000000..101fc74b20
 +#endif
 diff --git a/apps/asher/asher_theme.c b/apps/asher/asher_theme.c
 new file mode 100644
-index 0000000000..f17983c61a
+index 0000000000..7aa7eb1b67
 --- /dev/null
 +++ b/apps/asher/asher_theme.c
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,267 @@
 +#include <stdio.h>
 +#include <string.h>
 +#include <fcntl.h>
 +#include "config.h"
++#include "misc.h"
++#include "kernel.h"
++#include "action.h"
 +#include "file.h"
 +#include "settings.h"
 +#include "menu.h"
 +#include "splash.h"
 +#include "lang.h"
++#include "backlight.h"
++#include "storage.h"
++#include "lcd.h"
 +#include "asher_theme.h"
 +#include "asher_wallpaper.h"
 +#include "asher_ui.h"
@@ -1697,6 +2303,15 @@ index 0000000000..f17983c61a
 +    { "Lantern Alley",        "alley",      false },
 +    { "Dusk Street",          "dusk",       false },
 +    { "Blossom Lane",         "blossom",    false },
++    { "Cyber Rain Street",    "neonrain",   false },
++    { "Cyber Biker Alley",    "biker",      false },
++    { "Cyber Bunny Market",   "bunny",      false },
++    { "Cyber City Skyline",   "skyline",    false },
++    { "Night Train",          "train",      false },
++    { "Ramen Tower",          "ramen",      false },
++    { "Christmas Toy Shop",   "toyshop",    false },
++    { "Snowy Cottage",        "cottage",    false },
++    { "Moonlit Castle",       "castle",     false },
 +    { "Off",                  NULL,         false },
 +};
 +#define NUM_WPS ((int)(sizeof(wps) / sizeof(wps[0])))
@@ -1710,9 +2325,11 @@ index 0000000000..f17983c61a
 +
 +static void save_state(void)
 +{
-+    char s[2] = { '0' + cur_theme, 'a' + cur_wp };
++    char s[48];
++    int n = snprintf(s, sizeof(s), "%c:%s\n", '0' + cur_theme,
++                     wps[cur_wp].scene ? wps[cur_wp].scene : "off");
 +    int fd = open(STATE_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-+    if (fd >= 0) { write(fd, s, 2); close(fd); }
++    if (fd >= 0) { write(fd, s, n); close(fd); }
 +}
 +
 +static void apply_wallpaper(int i)
@@ -1732,30 +2349,50 @@ index 0000000000..f17983c61a
 +
 +void asher_theme_apply_saved(void)
 +{
-+    char s[2];
-+    int t = 0, w = 0;
++    char s[48];
++    int t = 0, w = 0, len = 0;
 +    int fd = open(STATE_FILE, O_RDONLY);
 +    if (fd >= 0)
 +    {
-+        if (read(fd, s, 2) == 2)
-+        {
-+            if (s[0] >= '0' && s[0] < '0' + NUM_THEMES) t = s[0] - '0';
-+            if (s[1] >= 'a' && s[1] < 'a' + NUM_WPS) w = s[1] - 'a';
-+        }
++        len = read(fd, s, sizeof(s) - 1);
 +        close(fd);
++    }
++    if (len >= 2)
++    {
++        s[len] = '\0';
++        if (s[0] >= '0' && s[0] < '0' + NUM_THEMES) t = s[0] - '0';
++        if (s[1] == ':')
++        {
++            char *nl = strchr(s, '\n');
++            if (nl) *nl = '\0';
++            for (int i = 0; i < NUM_WPS; i++)
++                if (wps[i].scene ? !strcmp(wps[i].scene, s + 2) : !strcmp(s + 2, "off"))
++                    w = i;
++        }
++        else if (s[1] >= 'a' && s[1] <= 'l')        /* old format */
++            w = (s[1] == 'l') ? NUM_WPS - 1 : s[1] - 'a';
 +    }
 +    apply_theme(t);
 +    apply_wallpaper(w);
 +    aui_init();     /* fonts, icons and the album art slot */
-+}
-+
-+static int pick_wallpaper(void *p)
-+{
-+    int i = (int)(intptr_t)p;
-+    apply_wallpaper(i);
-+    save_state();
-+    splashf(HZ, "Wallpaper: %s", wps[i].name);
-+    return 0;
++    /* one click when buttons are held (e.g. Menu+Select to reset), the
++     * wheel still clicks on every step */
++    global_settings.keyclick_repeats = false;
++    /* battery savers: the screen controller sleeps 1 second after the
++     * fade, and the hard drive spins down as soon as it's allowed to */
++#ifdef HAVE_LCD_SLEEP_SETTING
++    global_settings.lcd_sleep_after_backlight_off = 1;
++    lcd_set_sleep_after_backlight_off(1);
++#endif
++#ifdef HAVE_DISK_STORAGE
++    global_settings.disk_spindown = 3;
++    storage_spindown(3);
++#endif
++#ifdef HAS_BUTTON_HOLD
++    /* sliding the hold switch on fades the screen straight out */
++    global_settings.backlight_on_button_hold = 1;
++    backlight_set_on_button_hold(1);
++#endif
 +}
 +
 +static int pick_theme(void *p)
@@ -1767,24 +2404,123 @@ index 0000000000..f17983c61a
 +    return 0;
 +}
 +
-+#define WPI(n, label) \
-+    MENUITEM_FUNCTION_W_PARAM(wpi##n, MENU_EXITAFTERTHISMENU, label, \
-+                              pick_wallpaper, (void *)(intptr_t)(n), NULL, Icon_NOICON)
-+WPI(0, "Street (Time of Day)");
-+WPI(1, "Arcade");
-+WPI(2, "Pumpkin Witch");
-+WPI(3, "Rainy Cabin");
-+WPI(4, "Snowy Cafe");
-+WPI(5, "Bus Stop");
-+WPI(6, "Frozen Creek");
-+WPI(7, "City Sunset");
-+WPI(8, "Lantern Alley");
-+WPI(9, "Dusk Street");
-+WPI(10, "Blossom Lane");
-+WPI(11, "Off");
-+MAKE_MENU(asher_wallpaper_menu, "Wallpaper", NULL, Icon_NOICON,
-+          &wpi0, &wpi1, &wpi2, &wpi3, &wpi4, &wpi5, &wpi6, &wpi7, &wpi8,
-+          &wpi9, &wpi10, &wpi11);
++/* ---- Settings > Wallpaper: scroll through live previews ---- */
++#define PV_X ((AUI_W - ASHER_PV_W) / 2)
++#define PV_Y (AUI_BAR + 3)
++
++static void picker_draw(int sel, bool shown, int pct)
++{
++    const struct aui_theme *t = aui_theme();
++    char buf[48];
++    const fb_data *f = shown ? asher_wp_preview_frame() : NULL;
++
++    aui_vgrad(0, 0, AUI_W, AUI_H, t->bg_top, t->bg_bot);
++    aui_topbar();
++    aui_round(PV_X - 3, PV_Y - 3, ASHER_PV_W + 6, ASHER_PV_H + 6, 6,
++              t->light ? 0xb9bfcc : 0x3a3f73, t->light ? 0x9aa2b4 : 0x262a55);
++    if (f)
++        aui_blit(f, ASHER_PV_W, ASHER_PV_H, PV_X, PV_Y);
++    else
++        aui_vgrad(PV_X, PV_Y, ASHER_PV_W, ASHER_PV_H, 0x1c1f3d, 0x0b0c1c);
++    if (wps[sel].scene && (!f || !asher_wp_preview_ready()))
++        aui_progress(PV_X + 50, PV_Y + ASHER_PV_H - 18, ASHER_PV_W - 100, 6,
++                     shown ? pct : 0, 100);
++    aui_present();
++
++    if (!wps[sel].scene)
++        aui_text(AF_RETRO, AUI_W / 2, PV_Y + ASHER_PV_H / 2 - 10, 0xc9cfee,
++                 "NO WALLPAPER", ASHER_PV_W - 10, 1);
++    else if (!f)
++        aui_text(AF_RETRO_S, AUI_W / 2, PV_Y + ASHER_PV_H / 2 - 4, 0xc9cfee,
++                 "loading preview", ASHER_PV_W - 10, 1);
++
++    int ny = PV_Y + ASHER_PV_H + 5;
++    aui_text(AF_BIG, AUI_W / 2, ny, t->text, wps[sel].name, AUI_W - 50, 1);
++    aui_text(AF_BIG, 12, ny, t->sub, "<", 20, 0);
++    aui_text(AF_BIG, AUI_W - 12, ny, t->sub, ">", 20, 2);
++    snprintf(buf, sizeof(buf), sel == cur_wp ? "%d of %d  -  in use" : "%d of %d",
++             sel + 1, NUM_WPS);
++    aui_text(AF_SMALLR, AUI_W / 2, ny + 20, t->sub, buf, AUI_W - 20, 1);
++    aui_topbar_text("Wallpaper");
++    aui_update();
++}
++
++static int wallpaper_picker(void)
++{
++    int sel = cur_wp, shown = -1, frame = -1, pct = 0;
++    long settle = 0;
++    bool redraw = true;
++
++    aui_begin();
++    while (1)
++    {
++        /* open the preview once the wheel has rested on an item */
++        if (shown != sel && TIME_AFTER(current_tick, settle))
++        {
++            asher_wp_preview_open(wps[sel].scene, wps[sel].timed);
++            shown = sel;
++            pct = 0;
++            redraw = true;
++        }
++        bool loading = shown == sel && asher_wp_preview_loading();
++        if (loading)
++        {
++            int before = pct;
++            pct = asher_wp_preview_load(2);      /* a little at a time */
++            if (pct != before) redraw = true;
++        }
++        int f = asher_wp_preview_frame_no();
++        if (f != frame) { frame = f; redraw = true; }
++        if (aui_woke()) redraw = true;
++        if (redraw && aui_screen_on())
++        {
++            picker_draw(sel, shown == sel, pct);
++            redraw = false;
++        }
++
++        int tmo = loading ? 1 : (shown != sel ? HZ / 10
++                  : (asher_wp_preview_ready() ? asher_wp_preview_ticks() : HZ));
++        int a = get_action(CONTEXT_STD, aui_screen_on() ? tmo : HZ);
++        switch (a)
++        {
++            case ACTION_STD_NEXT: case ACTION_STD_NEXTREPEAT:
++            case ACTION_STD_PREV: case ACTION_STD_PREVREPEAT:
++            {
++                bool next = a == ACTION_STD_NEXT || a == ACTION_STD_NEXTREPEAT;
++                sel = (sel + (next ? 1 : NUM_WPS - 1)) % NUM_WPS;
++                asher_wp_preview_close();       /* stop loading the old one */
++                shown = -1;
++                settle = current_tick + HZ / 4;
++                redraw = true;
++                break;
++            }
++            case ACTION_STD_OK:
++                asher_wp_preview_close();
++                apply_wallpaper(sel);
++                save_state();
++                aui_end();
++                splashf(HZ, "Wallpaper: %s", wps[sel].name);
++                return 0;
++            case ACTION_STD_CANCEL:
++            case ACTION_STD_MENU:
++                asher_wp_preview_close();
++                aui_end();
++                return 0;
++            case ACTION_NONE:
++                break;
++            default:
++                if (default_event_handler(a) == SYS_USB_CONNECTED)
++                {
++                    asher_wp_preview_close();
++                    aui_end();
++                    return 0;
++                }
++                redraw = true;
++                break;
++        }
++    }
++}
++MENUITEM_FUNCTION(asher_wallpaper_menu, 0, "Wallpaper", wallpaper_picker, NULL, Icon_NOICON);
 +
 +#define THI(n, label) \
 +    MENUITEM_FUNCTION_W_PARAM(thi##n, MENU_EXITAFTERTHISMENU, label, \
@@ -1810,15 +2546,16 @@ index 0000000000..728fa524c6
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..71b09107ce
+index 0000000000..ba0453cdae
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,543 @@
+@@ -0,0 +1,583 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
 +#include <fcntl.h>
 +#include "config.h"
++#include "string-extra.h"
 +#include "system.h"
 +#include "kernel.h"
 +#include "file.h"
@@ -1837,6 +2574,7 @@ index 0000000000..71b09107ce
 +#include "core_alloc.h"
 +#include "action.h"
 +#include "asher_ui.h"
++#include "asher_boot.h"
 +#include "asher_theme.h"
 +#include "asher_wallpaper.h"
 +
@@ -1967,6 +2705,7 @@ index 0000000000..71b09107ce
 +void aui_background(bool allow_wallpaper)
 +{
 +    const struct aui_theme *t = aui_theme();
++    if (allow_wallpaper && t->wallpaper) asher_wp_prepare();
 +    const fb_data *f = (allow_wallpaper && t->wallpaper) ? asher_wp_full() : NULL;
 +    if (f)
 +        memcpy(aui_fb, f, sizeof(aui_fb));
@@ -2063,6 +2802,7 @@ index 0000000000..71b09107ce
 +static int fonts[AF_COUNT] = { -1, -1, -1, -1, -1, -1 };
 +static bool inited;
 +static bool load_anim(int i);
++static void wp_loading_cb(int pct);
 +
 +/* album art slot shared by Stats and Now Playing (120x120) */
 +static int aa_slot = -1;
@@ -2081,6 +2821,7 @@ index 0000000000..71b09107ce
 +        load_sprite(i);
 +    for (int i = 0; i < LDR_COUNT; i++)
 +        load_anim(i);
++    asher_wp_set_loading_cb(wp_loading_cb);
 +#ifdef HAVE_ALBUMART
 +    if (aa_slot < 0)
 +    {
@@ -2148,11 +2889,20 @@ index 0000000000..71b09107ce
 +void aui_loading(int which, const char *text, const char *sub, long start, bool once)
 +{
 +    struct anim *a = &anims[which];
-+    int y = AUI_BAR + 10, h = a->handle > 0 ? a->h : 0;
-+    int th = text ? aui_font_h(AF_RETRO) + 8 : 0, sh = sub ? aui_font_h(AF_RETRO_S) + 6 : 0;
++    int h = a->handle > 0 ? a->h : 0;
++    int th = text ? aui_font_h(AF_RETRO) + 6 : 0, sh = sub ? aui_font_h(AF_RETRO_S) + 4 : 0;
++    int avail = AUI_H - AUI_BAR, y, ty;
++    if (h + th + sh + 8 <= avail)
++    {
++        y = AUI_BAR + (avail - h - th - sh) / 2;
++        ty = y + h + 6;
++    }
++    else      /* tall animation: pin it under the bar, text at the bottom */
++    {
++        y = AUI_BAR;
++        ty = AUI_H - th - sh - 2;
++    }
 +    aui_fill(0, 0, AUI_W, AUI_H, anim_bg[which]);
-+    aui_topbar();
-+    y = AUI_BAR + (AUI_H - AUI_BAR - h - th - sh) / 2;
 +    if (a->handle > 0)
 +    {
 +        long ms = (long)(current_tick - start) * (1000 / HZ);
@@ -2162,9 +2912,12 @@ index 0000000000..71b09107ce
 +        aui_blit((const fb_data *)((char *)core_get_data(a->handle) + a->fsz * f),
 +                 a->w, a->h, (AUI_W - a->w) / 2, y);
 +    }
++    if (text && ty < y + h)    /* soften the animation behind the text */
++        aui_shade(0, ty - 4, AUI_W, AUI_H - ty + 4, 0, 60, anim_bg[which]);
++    aui_topbar();
 +    aui_present();
-+    if (text) aui_text(AF_RETRO, AUI_W / 2, y + h + 8, anim_fg[which], text, AUI_W - 16, 1);
-+    if (sub)  aui_text(AF_RETRO_S, AUI_W / 2, y + h + th + 4, 0xb8bcd6, sub, AUI_W - 16, 1);
++    if (text) aui_text(AF_RETRO, AUI_W / 2, ty, anim_fg[which], text, AUI_W - 16, 1);
++    if (sub)  aui_text(AF_RETRO_S, AUI_W / 2, ty + th, 0xd0d4ea, sub, AUI_W - 16, 1);
 +    aui_topbar_text("");
 +    aui_update();
 +}
@@ -2181,6 +2934,17 @@ index 0000000000..71b09107ce
 +        int act = get_action(CONTEXT_STD, aui_loading_ticks(which));
 +        if (act != ACTION_NONE) break;          /* any button skips it */
 +    }
++}
++
++/* shown while a wallpaper is read from the (slow) hard drive */
++static long wp_load_start;
++static void wp_loading_cb(int pct)
++{
++    char sub[16];
++    if (pct == 0 || !wp_load_start) wp_load_start = current_tick;
++    if (!aui_screen_on()) return;
++    snprintf(sub, sizeof(sub), "%d%%", pct);
++    aui_loading(LDR_STATS, "LOADING WALLPAPER", sub, wp_load_start, false);
 +}
 +
 +int asher_splash_font(void)
@@ -2293,6 +3057,7 @@ index 0000000000..71b09107ce
 +{
 +    lcd_set_viewport(NULL);
 +    lcd_bitmap(aui_fb, 0, 0, AUI_W, AUI_H);
++    asher_boot_release();     /* first screen after boot is up: bar allowed again */
 +}
 +
 +void aui_text(int font, int x, int y, unsigned rgb, const char *s, int maxw, int align)
@@ -2357,12 +3122,23 @@ index 0000000000..71b09107ce
 +{
 +    return is_backlight_on(true);
 +}
++
++bool aui_dirty;     /* something drew over the screen: redraw it */
++
++bool aui_woke(void)
++{
++    static bool last_on = true;
++    bool on = is_backlight_on(true), woke = on && !last_on;
++    last_on = on;
++    if (aui_dirty) { aui_dirty = false; woke = true; }
++    return woke;
++}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..b874a90006
+index 0000000000..0fdd535d2a
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,91 @@
 +/* Asher OS shared drawing layer.
 + * Screens are composed into an off-screen buffer (aui_fb): wallpaper,
 + * glass panels and alpha-blended sprites. The buffer is then copied to the
@@ -2451,13 +3227,15 @@ index 0000000000..b874a90006
 +void aui_fmt_time(char *buf, size_t n, long ms);
 +int  aui_volume_pct(void);
 +bool aui_screen_on(void);
++bool aui_woke(void);                    /* screen just turned back on? */
++extern bool aui_dirty;                  /* set to make the screen redraw */
 +#endif
 diff --git a/apps/asher/asher_wallpaper.c b/apps/asher/asher_wallpaper.c
 new file mode 100644
-index 0000000000..f59abb38a8
+index 0000000000..a06e8780bf
 --- /dev/null
 +++ b/apps/asher/asher_wallpaper.c
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,224 @@
 +/* Asher OS live wallpapers. See asher_wallpaper.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -2483,7 +3261,13 @@ index 0000000000..f59abb38a8
 +};
 +static struct awp full = { -1 }, small = { -1 };
 +
++static void (*load_cb)(int pct);
++static int load_base, load_span;
++
++void asher_wp_set_loading_cb(void (*cb)(int pct)) { load_cb = cb; }
++
 +static char want[40];          /* chosen wallpaper (base name), "" = off */
++static char failed[48];        /* last pack that could not be loaded */
 +static bool want_auto;         /* follow the time of day */
 +static long next_check;
 +
@@ -2515,11 +3299,16 @@ index 0000000000..f59abb38a8
 +    p->fsz = (size_t)w * h * sizeof(fb_data);
 +    p->handle = core_alloc((size_t)n * p->fsz);
 +    if (p->handle <= 0) { close(fd); p->handle = -1; p->n = 0; return false; }
-+    char *dst = core_get_data_pinned(p->handle);
 +    bool ok = true;
++    if (load_cb) load_cb(load_base);
 +    for (int i = 0; i < n && ok; i++)
++    {
++        char *dst = core_get_data_pinned(p->handle);
 +        ok = read(fd, dst + (size_t)i * p->fsz, p->fsz) == (ssize_t)p->fsz;
-+    core_unpin(p->handle);
++        core_unpin(p->handle);
++        if (load_cb && (i & 1) == 0)
++            load_cb(load_base + (load_span * (i + 1)) / n);
++    }
 +    close(fd);
 +    if (!ok) { awp_free(p); return false; }
 +    strmemccpy(p->name, name, sizeof(p->name));
@@ -2545,17 +3334,24 @@ index 0000000000..f59abb38a8
 +    next_check = current_tick + 30 * HZ;
 +    r = want_auto ? asher_scene_for_time() : want;
 +    snprintf(sname, sizeof(sname), "%s_s", r);
-+    awp_load(&full, r, LCD_WIDTH, LCD_HEIGHT);
-+    awp_load(&small, sname, ASHER_BOX_W, ASHER_BOX_H);
++    bool need_full = !(full.handle > 0 && !strcmp(full.name, r));
++    bool need_small = !(small.handle > 0 && !strcmp(small.name, sname));
++    load_base = 0; load_span = need_small ? 80 : 100;
++    if (!strcmp(failed, r)) return;
++    if (need_full && !awp_load(&full, r, LCD_WIDTH, LCD_HEIGHT))
++        { strmemccpy(failed, r, sizeof(failed)); return; }
++    load_base = need_full ? 80 : 0; load_span = need_full ? 20 : 100;
++    if (need_small) awp_load(&small, sname, ASHER_BOX_W, ASHER_BOX_H);
 +}
 +
 +void asher_wallpaper_set(const char *scene, bool follow_time)
 +{
 +    want_auto = follow_time;
 +    next_check = 0;
++    failed[0] = '\0';
 +    if (scene) strmemccpy(want, scene, sizeof(want)); else want[0] = '\0';
 +    if (!want[0]) { awp_free(&full); awp_free(&small); return; }
-+    ensure_loaded();          /* load now (at boot, before music buffers) */
++    /* loaded on the next screen that shows it (with a loading screen) */
 +}
 +
 +static int frame_index(const struct awp *p)
@@ -2571,6 +3367,8 @@ index 0000000000..f59abb38a8
 +    return (const fb_data *)((char *)core_get_data(p->handle)
 +                             + (size_t)frame_index(p) * p->fsz);
 +}
++
++void asher_wp_prepare(void) { ensure_loaded(); }
 +
 +const fb_data *asher_wp_full(void)  { return want[0] ? frame(&full) : NULL; }
 +const fb_data *asher_wp_small(void) { return want[0] ? frame(&small) : NULL; }
@@ -2592,12 +3390,82 @@ index 0000000000..f59abb38a8
 +    struct awp *p = full.n > 1 ? &full : &small;
 +    return asher_wp_animated() ? frame_index(p) : 0;
 +}
++
++/* ------------------------------------------------------------------ */
++/* Settings > Wallpaper preview (224x168 packs, read a few frames at a  */
++/* time so scrolling past one never waits for the hard drive)          */
++/* ------------------------------------------------------------------ */
++static struct { int fd, handle, w, h, n, ms, loaded; size_t fsz; } pv = { -1, -1 };
++
++void asher_wp_preview_close(void)
++{
++    if (pv.fd >= 0) close(pv.fd);
++    if (pv.handle > 0) core_free(pv.handle);
++    pv.fd = pv.handle = -1;
++    pv.n = pv.loaded = 0;
++}
++
++bool asher_wp_preview_open(const char *scene, bool timed)
++{
++    char path[MAX_PATH];
++    unsigned char hd[AWP_HDR];
++    asher_wp_preview_close();
++    if (!scene) return false;
++    snprintf(path, sizeof(path), AWP_DIR "%s_p.awp", timed ? asher_scene_for_time() : scene);
++    pv.fd = open(path, O_RDONLY);
++    if (pv.fd < 0) return false;
++    if (read(pv.fd, hd, AWP_HDR) != AWP_HDR || memcmp(hd, "AWP1", 4)
++        || (hd[4] | hd[5] << 8) != ASHER_PV_W || (hd[6] | hd[7] << 8) != ASHER_PV_H
++        || (pv.n = hd[8] | hd[9] << 8) < 1)
++        { asher_wp_preview_close(); return false; }
++    pv.w = ASHER_PV_W; pv.h = ASHER_PV_H;
++    pv.ms = hd[10] | hd[11] << 8;
++    if (pv.ms < 50) pv.ms = 50;
++    pv.fsz = (size_t)pv.w * pv.h * sizeof(fb_data);
++    pv.handle = core_alloc((size_t)pv.n * pv.fsz);
++    if (pv.handle <= 0) { pv.handle = -1; asher_wp_preview_close(); return false; }
++    return true;
++}
++
++/* read up to 'count' more frames; returns how much is loaded, 0..100 */
++int asher_wp_preview_load(int count)
++{
++    if (pv.handle <= 0) return 0;
++    while (count-- > 0 && pv.loaded < pv.n)
++    {
++        char *dst = core_get_data_pinned(pv.handle);
++        bool ok = read(pv.fd, dst + (size_t)pv.loaded * pv.fsz, pv.fsz) == (ssize_t)pv.fsz;
++        core_unpin(pv.handle);
++        if (!ok) { asher_wp_preview_close(); return 0; }
++        pv.loaded++;
++    }
++    if (pv.loaded == pv.n && pv.fd >= 0) { close(pv.fd); pv.fd = -1; }
++    return pv.loaded * 100 / pv.n;
++}
++
++bool asher_wp_preview_ready(void) { return pv.handle > 0 && pv.loaded == pv.n; }
++bool asher_wp_preview_loading(void) { return pv.handle > 0 && pv.loaded < pv.n; }
++int asher_wp_preview_ticks(void) { int t = pv.ms * HZ / 1000; return t < 1 ? 1 : t; }
++
++int asher_wp_preview_frame_no(void)
++{
++    if (!asher_wp_preview_ready() || pv.n <= 1) return 0;
++    return (int)(((unsigned long)current_tick * (1000 / HZ) / pv.ms) % pv.n);
++}
++
++/* the frame to show: the first one while the rest load, then it plays */
++const fb_data *asher_wp_preview_frame(void)
++{
++    if (pv.handle <= 0 || pv.loaded == 0) return NULL;
++    return (const fb_data *)((char *)core_get_data(pv.handle)
++                             + (size_t)asher_wp_preview_frame_no() * pv.fsz);
++}
 diff --git a/apps/asher/asher_wallpaper.h b/apps/asher/asher_wallpaper.h
 new file mode 100644
-index 0000000000..b3b1dac0c1
+index 0000000000..9f98046afb
 --- /dev/null
 +++ b/apps/asher/asher_wallpaper.h
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,34 @@
 +#ifndef ASHER_WALLPAPER_H
 +#define ASHER_WALLPAPER_H
 +#include <stdbool.h>
@@ -2617,45 +3485,274 @@ index 0000000000..b3b1dac0c1
 +int  asher_wp_frame_ticks(void);      /* ticks between frames */
 +int  asher_wp_frame_no(void);         /* changes whenever the frame changes */
 +const char *asher_scene_for_time(void);
++void asher_wp_prepare(void);           /* load the wallpaper now if needed */
++void asher_wp_set_loading_cb(void (*cb)(int pct));
++
++/* Settings > Wallpaper preview */
++#define ASHER_PV_W 224
++#define ASHER_PV_H 168
++bool asher_wp_preview_open(const char *scene, bool timed);
++void asher_wp_preview_close(void);
++int  asher_wp_preview_load(int count);     /* returns percent loaded */
++bool asher_wp_preview_ready(void);
++bool asher_wp_preview_loading(void);
++int  asher_wp_preview_ticks(void);
++int  asher_wp_preview_frame_no(void);
++const fb_data *asher_wp_preview_frame(void);
 +#endif
 diff --git a/apps/asher/moonphase.c b/apps/asher/moonphase.c
 new file mode 100644
-index 0000000000..bbe9d9ac69
+index 0000000000..3308c53781
 --- /dev/null
 +++ b/apps/asher/moonphase.c
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,47 @@
++#include <stdint.h>
 +#include "moonphase.h"
++#include "moontab.inc"
 +
-+/* Days since a known new moon (2000-01-06 18:14 UTC), mod synodic month. */
-+int asher_moon_phase(int year, int month, int day)
++#define NEV ((int)(sizeof(moon_events) / sizeof(moon_events[0])))
++
++/* days since 2025-01-01 for a civil date */
++static long days_from_2025(int y, int m, int d)
 +{
-+    /* Julian day number at noon for the given date */
-+    int a = (14 - month) / 12;
-+    int y = year + 4800 - a;
-+    int m = month + 12 * a - 3;
-+    long jdn = day + (153 * m + 2) / 5 + 365L * y + y / 4 - y / 100
-+               + y / 400 - 32045;
++    int a = (14 - m) / 12;
++    long yy = y + 4800 - a, mm = m + 12 * a - 3;
++    long jdn = d + (153 * mm + 2) / 5 + 365 * yy + yy / 4 - yy / 100 + yy / 400 - 32045;
++    return jdn - 2460677L;              /* JDN of 2025-01-01 */
++}
 +
-+    /* Work in hundredths of a day to avoid floats on the iPod CPU.
-+     * Reference new moon JD = 2451550.26, synodic month = 29.530589 d */
-+    long since = (jdn - 2451550L) * 100 - 26;
-+    long cycle = 2953;                       /* 29.53 days, x100 */
-+    long pos = since % cycle;
-+    if (pos < 0) pos += cycle;
-+    return (int)((pos * 8 + cycle / 2) / cycle) & 7;
++static long floor_div(long a, long b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
++
++int asher_moon_phase(int year, int month, int day, int hour, int minute)
++{
++    long today = days_from_2025(year, month, day);
++    long now = today * 1440 + hour * 60 + minute;
++    int i;
++
++    if (now >= (moon_events[0] >> 2) && now < (moon_events[NEV - 1] >> 2))
++    {
++        for (i = 0; i + 1 < NEV && (moon_events[i + 1] >> 2) <= now; i++)
++            ;
++        long t0 = moon_events[i] >> 2, t1 = moon_events[i + 1] >> 2;
++        int k0 = moon_events[i] & 3, k1 = moon_events[i + 1] & 3;
++        if (floor_div(t0, 1440) == today) return k0 * 2;   /* exact phase today */
++        if (floor_div(t1, 1440) == today) return k1 * 2;
++        return k0 * 2 + 1;                                 /* in between */
++    }
++
++    /* outside the table: mean lunation from a known new moon */
++    long age = (now - (moon_events[0] >> 2)) % 42524;      /* 29.53 days in minutes */
++    if (age < 0) age += 42524;
++    long d10 = age * 10 / 1440;                            /* age in tenths of days */
++    if (d10 < 10 || d10 >= 285) return 0;
++    if (d10 < 64) return 1;
++    if (d10 < 84) return 2;
++    if (d10 < 138) return 3;
++    if (d10 < 158) return 4;
++    if (d10 < 212) return 5;
++    if (d10 < 232) return 6;
++    return 7;
 +}
 diff --git a/apps/asher/moonphase.h b/apps/asher/moonphase.h
 new file mode 100644
-index 0000000000..c667aaf316
+index 0000000000..b49aed02f4
 --- /dev/null
 +++ b/apps/asher/moonphase.h
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,9 @@
 +#ifndef ASHER_MOONPHASE_H
 +#define ASHER_MOONPHASE_H
-+/* Returns moon phase index 0..7 (0=new, 2=first quarter, 4=full,
-+ * 6=last quarter) from the calendar date. No live data needed. */
-+int asher_moon_phase(int year, int month, int day);
++/* Moon phase 0..7 for a local date and time:
++ * 0 New, 1 Waxing Crescent, 2 First Quarter, 3 Waxing Gibbous,
++ * 4 Full, 5 Waning Gibbous, 6 Last Quarter, 7 Waning Crescent.
++ * The quarter names are used only on the calendar day the exact phase
++ * happens (like a calendar shows it). */
++int asher_moon_phase(int year, int month, int day, int hour, int minute);
 +#endif
+diff --git a/apps/asher/moontab.inc b/apps/asher/moontab.inc
+new file mode 100644
+index 0000000000..e28dd7b005
+--- /dev/null
++++ b/apps/asher/moontab.inc
+@@ -0,0 +1,179 @@
++/* Principal moon phases 2025-2045 in Pacific local time (minutes since
++ * 2025-01-01 00:00) << 2 | type (0 new, 1 first quarter, 2 full, 3 last quarter).
++ * Generated with PyEphem. */
++static const int32_t moon_events[] = {
++    -178956, -136455, -97674, -54165, -8056, 32625,
++    72586, 118203, 162380, 201609, 243334, 290291,
++    332336, 370685, 414698, 461879, 502068, 540297,
++    585930, 632303, 671164, 710125, 756942, 801835,
++    840008, 880481, 927534, 970639, 1008844, 1051321,
++    1097666, 1138951, 1177964, 1222485, 1267418, 1307091,
++    1347624, 1393781, 1436914, 1475411, 1517976, 1565013,
++    1606270, 1644291, 1688980, 1736001, 1775358, 1813795,
++    1860188, 1906313, 1944778, 1984527, 2031772, 2076277,
++    2114410, 2156115, 2203164, 2245629, 2284358, 2328175,
++    2374084, 2414509, 2454630, 2500475, 2544572, 2583429,
++    2625406, 2672127, 2714124, 2752205, 2796094, 2843083,
++    2883120, 2921321, 2966822, 3013203, 3051816, 3090941,
++    3137506, 3182515, 3220492, 3261141, 3308062, 3351207,
++    3389424, 3431945, 3478394, 3519567, 3558824, 3603293,
++    3648434, 3687939, 3728840, 3775009, 3818206, 3856435,
++    3899288, 3946509, 3987574, 4025795, 4070604, 4117849,
++    4157154, 4195919, 4242336, 4288457, 4326790, 4366783,
++    4414064, 4458233, 4496494, 4538227, 4585316, 4627541,
++    4666494, 4710215, 4756044, 4796145, 4836350, 4881911,
++    4925752, 4964573, 5006394, 5053191, 5094880, 5133105,
++    5176738, 5223819, 5263684, 5301993, 5347378, 5393739,
++    5432420, 5471497, 5518194, 5563071, 5601284, 5641805,
++    5688974, 5732003, 5770460, 5812989, 5859546, 5900759,
++    5940144, 5984877, 6029622, 6069315, 6110256, 6156809,
++    6199714, 6238363, 6281328, 6328721, 6369610, 6407863,
++    6452928, 6499961, 6539294, 6577951, 6624628, 6670329,
++    6708742, 6748891, 6796204, 6840061, 6878266, 6920067,
++    6966904, 7008821, 7047554, 7091455, 7136944, 7177105,
++    7217074, 7262751, 7306428, 7345241, 7387002, 7433747,
++    7475524, 7513601, 7557398, 7604343, 7644412, 7682541,
++    7728190, 7774503, 7813292, 7852357, 7899218, 7944227,
++    7982384, 8023173, 8070310, 8113303, 8151668, 8194617,
++    8241042, 8282315, 8321784, 8366817, 8411714, 8451227,
++    8492496, 8539053, 8581934, 8620291, 8663644, 8710837,
++    8751642, 8789727, 8835196, 8882053, 8921146, 8959887,
++    9006400, 9052041, 9090146, 9130271, 9177288, 9221105,
++    9259110, 9301035, 9347720, 9389497, 9428250, 9472071,
++    9517640, 9557577, 9597742, 9643263, 9687100, 9725741,
++    9767726, 9814451, 9856256, 9894357, 9938278, 9985427,
++    10025336, 10063713, 10109390, 10155971, 10194336, 10233741,
++    10280650, 10325711, 10363888, 10404917, 10452186, 10495155,
++    10533796, 10576821, 10623338, 10664219, 10704028, 10749077,
++    10793838, 10833111, 10874536, 10921389, 10963906, 11002287,
++    11045528, 11092785, 11133198, 11171435, 11216448, 11263245,
++    11302158, 11340951, 11387364, 11432781, 11470962, 11510959,
++    11558056, 11601605, 11639806, 11681551, 11728360, 11770009,
++    11808898, 11852703, 11898268, 11938301, 11978470, 12024227,
++    12067896, 12106785, 12148746, 12195803, 12237424, 12275741,
++    12319562, 12366851, 12406744, 12445185, 12491202, 12537607,
++    12576368, 12615745, 12662982, 12707711, 12746040, 12787129,
++    12834426, 12877159, 12915792, 12959049, 13005238, 13046303,
++    13085952, 13131249, 13175606, 13214871, 13256144, 13302797,
++    13345118, 13383387, 13426628, 13473677, 13514154, 13552163,
++    13597296, 13643833, 13682886, 13721479, 13768000, 13813337,
++    13851542, 13891535, 13938608, 13982317, 14020402, 14062379,
++    14109064, 14150957, 14189750, 14233883, 14279360, 14319505,
++    14359810, 14405531, 14449236, 14488017, 14530394, 14577439,
++    14619140, 14657281, 14701810, 14748979, 14788824, 14827257,
++    14873490, 14919795, 14958336, 14997953, 15045054, 15089707,
++    15127776, 15169425, 15216426, 15259003, 15297516, 15340897,
++    15386918, 15427447, 15467180, 15512333, 15556710, 15595647,
++    15637084, 15683517, 15725890, 15763967, 15807284, 15854285,
++    15894686, 15932743, 15977804, 16024521, 16063386, 16102215,
++    16148624, 16194197, 16232282, 16272531, 16319624, 16363389,
++    16401590, 16443715, 16490576, 16532053, 16571206, 16615391,
++    16661008, 16700913, 16741634, 16787679, 16831264, 16869977,
++    16912586, 16959783, 17001116, 17039417, 17083938, 17131171,
++    17170652, 17209305, 17255670, 17301799, 17340204, 17379893,
++    17426950, 17471211, 17509384, 17550661, 17597690, 17639875,
++    17678544, 17721753, 17767758, 17808119, 17847864, 17893005,
++    17937234, 17976271, 18017568, 18064181, 18106350, 18144651,
++    18187836, 18235053, 18275362, 18313575, 18358716, 18405489,
++    18444470, 18483311, 18530032, 18575465, 18613566, 18653795,
++    18701192, 18744781, 18783206, 18825471, 18872344, 18913997,
++    18953226, 18997747, 19043044, 19083005, 19123698, 19170035,
++    19213240, 19251977, 19294598, 19342019, 19383176, 19421353,
++    19465994, 19512899, 19552420, 19590857, 19637102, 19682867,
++    19721328, 19760869, 19807894, 19852015, 19890100, 19931417,
++    19978258, 20020555, 20059020, 20102417, 20148218, 20188763,
++    20228368, 20273693, 20317878, 20356967, 20398372, 20445037,
++    20487346, 20525539, 20569088, 20616249, 20656730, 20694831,
++    20740144, 20786885, 20825886, 20864827, 20911736, 20957217,
++    20995418, 21036003, 21083288, 21126901, 21165186, 21207851,
++    21254484, 21295985, 21335254, 21379923, 21425076, 21464937,
++    21505846, 21552027, 21595188, 21633577, 21676402, 21723335,
++    21764412, 21802433, 21847062, 21893883, 21933200, 21971717,
++    22017750, 22063611, 22101836, 22141569, 22188386, 22232623,
++    22270604, 22312049, 22358882, 22401151, 22439756, 22483149,
++    22529134, 22569519, 22609464, 22654757, 22699102, 22738067,
++    22779832, 22826361, 22868594, 22906867, 22950628, 22998021,
++    23038210, 23076595, 23122200, 23169069, 23207822, 23247067,
++    23293984, 23339281, 23377474, 23418187, 23465516, 23508673,
++    23547398, 23589995, 23636624, 23677693, 23717130, 23761703,
++    23806692, 23846137, 23886998, 23933199, 23976064, 24014537,
++    24057126, 24104175, 24144996, 24183169, 24227598, 24274479,
++    24313744, 24352305, 24398354, 24444143, 24482540, 24522173,
++    24569222, 24613315, 24651564, 24692929, 24739978, 24782199,
++    24820996, 24864533, 24910258, 24950755, 24990776, 25036429,
++    25080514, 25119675, 25161496, 25208577, 25250542, 25288915,
++    25332856, 25380217, 25420334, 25458655, 25504532, 25551041,
++    25589870, 25629219, 25676300, 25721197, 25759414, 25800099,
++    25847308, 25890285, 25928614, 25971343, 26017656, 26058753,
++    26097934, 26142675, 26187400, 26226901, 26267598, 26313843,
++    26356684, 26395081, 26437738, 26484683, 26525684, 26563677,
++    26608358, 26655135, 26694580, 26733021, 26779326, 26825155,
++    26863576, 26903341, 26950466, 26994747, 27032648, 27074393,
++    27121342, 27163707, 27202472, 27246405, 27292234, 27332659,
++    27372884, 27418693, 27462718, 27501603, 27543804, 27590757,
++    27632678, 27670783, 27715016, 27762165, 27802358, 27840623,
++    27886488, 27932885, 27971422, 28010703, 28057516, 28102389,
++    28140334, 28181215, 28228172, 28271085, 28309322, 28352079,
++    28398364, 28439281, 28478590, 28523199, 28568080, 28607365,
++    28648306, 28694447, 28737408, 28775721, 28818578, 28865627,
++    28906548, 28944689, 28989446, 29036495, 29075728, 29114493,
++    29160586, 29206599, 29244904, 29284981, 29332202, 29376355,
++    29414644, 29456545, 29503622, 29545607, 29584700, 29628657,
++    29674474, 29714543, 29755028, 29800857, 29844618, 29883631,
++    29925836, 29972857, 30014370, 30052587, 30096616, 30143789,
++    30183438, 30221827, 30267508, 30313777, 30352270, 30391507,
++    30438324, 30482949, 30521054, 30561751, 30608852, 30651557,
++    30689986, 30732623, 30779000, 30819905, 30859294, 30904023,
++    30948808, 30988289, 31029210, 31075679, 31118432, 31157001,
++    31199902, 31246983, 31287780, 31326065, 31371078, 31418099,
++    31457404, 31496165, 31542870, 31588583, 31627056, 31667121,
++    31714538, 31758371, 31796736, 31838773, 31885678, 31927515,
++    31966740, 32010953, 32056366, 32096423, 32136716, 32182709,
++    32226150, 32264879, 32306988, 32353921, 32395386, 32433431,
++    32477528, 32524449, 32564234, 32602391, 32648216, 32694301,
++    32732902, 32772023, 32818904, 32863581, 32901638, 32942467,
++    32989492, 33032429, 33070730, 33113687, 33159940, 33201041,
++    33240438, 33285467, 33329980, 33369453, 33410662, 33457231,
++    33500048, 33538437, 33581822, 33629051, 33669868, 33708021,
++    33753406, 33800291, 33839448, 33878317, 33925042, 33970675,
++    34008872, 34049241, 34096634, 34140367, 34178516, 34220793,
++    34267442, 34309055, 34348020, 34392213, 34437570, 34477303,
++    34517740, 34563521, 34607034, 34645487, 34687744, 34734529,
++    34776002, 34813971, 34858084, 34905089, 34944738, 34983051,
++    35028780, 35075113, 35113534, 35152931, 35199760, 35244609,
++    35282650, 35323699, 35370836, 35413697, 35452014, 35495067,
++    35541504, 35582353, 35622166, 35667251, 35712024, 35751301,
++    35792854, 35839539, 35882084, 35920513, 35963990, 36011347,
++    36051752, 36090117, 36135398, 36182483, 36221368, 36260397,
++    36307022, 36352355, 36390552, 36430873, 36478034, 36521351,
++    36559656, 36601749, 36648430, 36689759, 36728828, 36772913,
++    36818198, 36857911, 36898284, 36944165, 36987490, 37026139,
++    37068240, 37115261, 37156566, 37194755, 37238836, 37286001,
++    37325654, 37364059, 37410008, 37456289, 37494914, 37534043,
++    37581232, 37625881, 37664182, 37705275, 37752596, 37795309,
++    37834010, 37877311, 37923568, 37964417, 38004226, 38049659,
++    38094028, 38133357, 38174870, 38221711, 38264192, 38302569,
++    38346102, 38393263, 38433624, 38471793, 38517210, 38563675,
++    38602640, 38641457, 38688146, 38733219, 38771416, 38811673,
++    38858722, 38902051, 38940200, 38982425, 39028894, 39070411,
++    39109288, 39153585, 39198738, 39238595, 39278944, 39324961,
++    39368346, 39406959, 39449324, 39496337, 39537822, 39575871,
++    39620148, 39667249, 39707010, 39745383, 39791664, 39837949,
++    39876486, 39916099, 39963308, 40008005, 40046122, 40087627,
++    40134736, 40177381, 40216006, 40259599, 40305644, 40346225,
++    40386402, 40431811, 40476100, 40515057, 40556794, 40603395,
++    40645604, 40683709, 40727346, 40774327, 40814556, 40852693,
++    40897982, 40944479, 40983212, 41022193, 41068646, 41113867,
++    41151880, 41192321, 41239254, 41282651, 41320820, 41363113,
++    41409698, 41451111, 41490252, 41534521, 41579878, 41619571,
++    41660304, 41706349, 41749786, 41788119, 41830788, 41877981,
++    41919254, 41957487, 42002128, 42049437, 42088882, 42127567,
++    42173860, 42220113, 42258502, 42298331, 42345560, 42389905,
++    42428130, 42469639, 42517016, 42559181, 42598010, 42641487,
++    42687464, 42727725, 42767726, 42813083, 42857144, 42896069,
++    42937646, 42984331, 43026256, 43064513, 43107902, 43155003,
++    43195068, 43233325, 43278522, 43325027, 43363832, 43402777,
++    43449390, 43494495, 43532748, 43573077, 43620286, 43663567,
++    43701984, 43744297, 43791002, 43832439, 43871472, 43916021,
++    43961214, 44001067, 44041840, 44088269, 44131394, 44170123,
++};
 diff --git a/apps/bitmaps/native/rockboxlogo.220x68x16.bmp b/apps/bitmaps/native/rockboxlogo.220x68x16.bmp
 index 1dc68a09f24c6dc1046298f962cc759c8e07fc3d..c3e80d630f366dd6bdeedfea58e97bc8b102c567 100644
 GIT binary patch
@@ -5004,6 +6101,307 @@ zW*cPC+MUC<_NzJ%DZm&18YXhY0>}glDY^feCjF;{-TJ*PgHq(>l&}{#?)6VapuqIA
 zqN?|4SZgMUA^Q=Y75)?ZH|7@#B&Eu8V+flZgs;EjQ^2QyPXV6-J_URV{C6qvA3+_J
 AumAu6
 
+diff --git a/apps/bitmaps/native/usblogo.176x48x16.bmp b/apps/bitmaps/native/usblogo.176x48x16.bmp
+index 9c7a6600cb3295b1890b3c7a844b62bc2ba768ec..2e76ae1979fce50d5fbaee338f391b239e0ffbd1 100644
+GIT binary patch
+literal 230454
+zcmeI1Kh88wQpDdCJ~l_d#99XjVXlP44RDdT#2Ogf0gr3oB7}hhNJ!j*Bam!Lp-@Iv
+zPR%^?r+Ye9^F13Cm6e_K>&zMW_AmeHw}1afzyAL}zm0$XH2(RE-~9UZzwzI{`SmC9
+zH~tg*|MJJb{_sy4zkdD4zyI6+{P%zDe;hxvG9U9{0`3Q<q1t?u2|MP)G*p|9GGWJj
+zn1*WeQ6}t|57SU>KFWk0^I;mQ%}1HAV?InnwfQI$cFc!qs5T#E!jAbc4b|qOOxQ6W
+zrlHz=lnFcL!!%Tzk1}EB4SeDe{+NIXoRk26UEI`h$D1)6;CQB?+I*A=JLbbQRGW`7
+zVaI%!hHCRsChV9G(@<?b%7h*BVH&E<N13o=K1@Tk`6v^1%!g^HHXmiej`=VR)#js2
+z*fAfbq1t?u2|MP)G*p|9GGWJjn1*WeQ6}t|57SU>KFWk0^I;mQ%}1HAV?InnwfQI$
+zcFc!qs5T#E!jAbc4b|qOOxQ6WrlHz=lnFcL!!%Tzk1}D$e3*u6^HC=3m=DuXZ9d9`
+zom2Dq{onpBKYXKEpZdOWwW0n%p?4qRBNzaIG2+$Kv~V*2{*k#Jq=j%iP_*I;_(b!x
+zS8L5LxNm!}Fk24$_s!!azRk%6l=xK{IHK{`YK7xlEHF>RCwhrLd4;GSJ;u8$6Zb^`
+zP_P5d@nPbVr?5;BCfBoy2|wa<H}h+r+|5YdMLY+j<}l=E!2zoyS$`XeBm8L8qel?N
+zBIDVa^%um)75oVT(IG7d_z)b{nr$|YWS!aAfrc2K$T83mnw(RG=16D=4w%h(_Z4}{
+zMJ~IXzo5!)P%6&6JW+gfAb;{+QGb}Jd6!Klfcqi<yX-)>@z@Q)pGd{^pelU?GGu;E
+zg01#A;)k5Eg(NE4U6`eQJq{<24E02SellMDmE-sone<P@r*sbLhYt~3&=81EQG7na
+z8hkh&8UjZmo=x~6SR*F$W63e)NNx@BZ4#Ie{0KEm{RmKTv!1NK{LT7{IV>GNz=^FB
+z@rf4VPu`3Bjd!`<*w6dIVK{n(`QS*3Jg6o+tC;Xh7%xNTK^(_2wo3hZ5Rse*W)ZQ(
+zBRD?I<jH<H&Rd~}dh%fToAJdQmX06b#MWi`WV^25U>AJgtd67~@tcu|pA(i{)KmP`
+z@~&bc$-Vg<zapQ$`P}4lSBnlj+dPPGceS>NkI4M!t~$uCTdi|%{ASsB)++xh&ng}X
+zi*S4aQkLdZfRv^A6d+}3J_Sfwnoj{zmgZA{l%@F;AZ2Mj1xQ(%PXSVv=2L)_rTG*f
+zWobSINLiXs0aBLcQ-GAE`4k{!X+8x=S(;A)QkLdZfRyFY_~2jmZvHFZqt)+vN`sZ9
+z`4k{!`AvLQ{~HHi`J3*`_gZP+cSR<B^LYxN_Gh%r<0^)IE(XV0<on_yyvu&3ns*U1
+z9E=zwQLP6vr$(k9^&=afg_&VkLLhBs=Ce4W=CGBS(f{Q^x?Cma!c-%_Znci%TP!eN
+z#0RfC@<T)9(|HLE5izWJ2|q;E4~N6@Dft%xDmbhJ$Fhxw$pNXslVgUo1D`xq&T86x
+zE`kw|Liy~(w=u}fySOh3n1$m{!3Xbp=+B7ZPu>d$W67GA@Iz>S@@{B+N`8c;&wqIf
+z8iFfPjsE2LOwJB;;S)YSZAm!T?s7dDseCwwHOH$TPBBquTT;gBU+~eb);VB&l=StV
+zc&E4{Gz7LFumurYta%AvMH_~v+}zDbq+P|g0UTWPkd`A?X-iCm;WK33$yPFFwvw~W
+z)0%wzi*@@wvoeFjYOD1R5|0K;k)^U34lhG%49s>bkLP_k5;_C$7fB$ng(Jfj2O}Ql
+zaIkEZWo8&mY!wkpEn`0$DsPjN<oW1gY6gT2;voHr3SAFSv?BPRL)w61o{nd^-B3SA
+zLJ#qUOfKUff7%!}Gd~{3TS&;}z4bVr>8bt#K11`o|Gsw>6Xm^#Kg!t5e{Vd%W_}!p
+z4^g&IPw^371mcUoS~`A3CVlfUA12^_U>d5;N13o=K1@Tk`6v^1%!g^HHXmiej`=VR
+z)#js2*fAfbq1t?u2|MP)G*p|9GGWJjn1*WeQ6}t|57SU>KFWk0^I;mQ%}1HAV?Inn
+zwfQI$cFc!qs5T#E!jAbc4b|qOOxQ6WrlHz=lnFcL!!%Tzk1}D$e3*u6^HC=3m=DuX
+zZ9d9`9rIxts?A54uwy<<L$&!R6L!ppX{f#+pSZF=CSU?5C7@qogA;cgc6H0~%7h*B
+zVH&E<N13o=K1@Tk`6v^1%!g^HHXmie&MWx*?$7@G=7(#z85{wtc&?xGJS(1are0;%
+zNR3~eWuNsbr)J)d<ov3cr|zobcxA%Q8Trh;bZ_s?@yv&x%M97SH=fVVm1v~Kuc~67
+z^(v=k-jC$`s+o`Os^fTN!p<4_a4+rDzlvv{nXu3K*?&bm=S;0n<a#uo9X-pt_vT+^
+zTlxB|boT3a{E8v_XXME}vs3>no_%J*KIdou74e)iwLX#S(Rg<BEbrc%f0b?J>$B3?
+zuix=2hU}k_C-=-w{i}HPnF;%xpZ!<FbI#QIM6O5U+0nDSdvE?#ww15XN@u@*$FCT&
+ze@33%GduOK;@M{=>~nthUlGqaQ|lAC9*t*5&+_iQ`B&LizCJ6R{rVlhV#xj(d2-L}
+z)W3>npP8`F`PqL~Jm*Zk%A7ve!;z{vv+kzDF{=3#@9y{<!+O8|Jmq+%r}~V1xR-Y7
+zU&XV}WZ38Y>_01>bEaNpPM_=HNY$KKchlh*)qIL~cYKavy<dNxay-*heMUaqOFQ+i
+z;@M|1>~nthUlGqaQ|lAC9*t*5&+_iQ`B&LizCJ6R{rVlhV#xj(d2-L})W3>npP8`F
+z`PqL(Jm*ZUPvm+uo*g~QyZ7c_Wn20BtaSG4cl?SW`)B0IJ+sn$$5jmb$B92<C0z5Y
+z&)9E#BiGL~RPXTNxm#(@yozD}IPqt!glnGl&imyIj%OOG%}1HAV?InnwfQI$c7l&T
+zCSU^RCBWl+Q^z%L#&Ce+nTBffQ6}t|57SU>KFWk0^I;mQ%}1HAV?InnwfQI$cFc!q
+zs5T#E!jAbc4b|qOOxQ6WrlHz=lnFcL!!%Tzk1}D$e3*u6^HC=3m=DuXZ9d9`9rIxt
+zs?A54uwy<<L$&!R6L!ppX{a_IWx|g6Fb&n_qfFQ_AEu$&e3S`0=EF2pn~ySK$9$NE
+zYV%Ph?3fSJP;EZSgdOu?8mi4lnXqF%OhdK#C=+(fhiRxbA7#Rh`7jOD=A%s5F(0O(
+z+I*A=JLbbQRGW`7VaI%!hUzci6IbxZ1We$h1oTU3aN>@`u5LMAnXqF%OhdK#C=+(f
+zhiRx*KL7l$|Cyf*E=!Hqoa{KBX{a_IWx|g6Fb&m(&)@ycUk{%+Ug9-jaU5TOl%@F;
+zAZ2Mj1xQ&IKEv?FR-7&IC7UiCuT0o6AEu$&e3S`0|M*Y;(9Uf5tF4TWUCy)8=D#A7
+zzWJCB6S%h@R>K=P<Nxy=rr7h#*rD&`?|7hVh4~aL`1esMR`Z*?!~Dj<lBzr?m*(GM
+zfoVQK(F*e^SlWRNGs4O|#xm!({B1L=evZw*@GndADL~57d<u{lv~~b>cs;*?&izyR
+zr!38<04d9#^H~jS`BlyN&C!mnT$UIt5!QYcgc-;4B0sOc04Yo7FF?xDd<u}VJU*Wo
+zx^~KPLd#za<~+X`<RN*2IzFHBLd(+i7a(P6J_SfwKE~(feC1DM3@Jxq7(@JUeoNYN
+zsbTrpeTRf)%lQkCvNWFpq%7aSCr0nyAKVgu*ZlIRmONM%2*dIXe1@m%mg`X_?3fSJ
+zQ2hX(1I}-hq*rU52kzVES((niB9p%Pyr0i%VDU2=0r-T8pT!U*20x}5kL6>6AH<pw
+zMP}ZbbyUS?L%ZJ!kh1&&K5>Pw|Fmr%qk*wa5gbZniNTz{bbk4D+%>;^(E1_-$~V%y
+z3?_3x+5J>}wtbEpk0b^#1ZHp*fS8EH!3c&A^I^e{hK_9cloarHL{^f=<6V4;e`y0O
+zT@O&S!h8}-+v?HV!6(NSf6I)-GBRK{g~q^-t!I7On$_gT=`K5Q5%)toCNRwhC|dD0
+zK4s##jiICS%iP5>Oaz2L3@2R0g#W}3moaF5;t&>Fe1*{M3o7Q@-dB0<YUz4bWYYf{
+zKC4bHJsit2jN0dUWR)=d$dEBSN>A6T0)_{zj-)?#!k6{K&SfL!Yx@7}_g%HF&Tlv+
+zcqfLBcz)3>?th?Yh558t!i*u}nSw4qPdS^|P0_{_vmD`NL}uD@<he_JBI|sLI^nZ9
+z>j-Yay5CwXFwF-jTCvY()vh}~raLi1|Hq@>Fu(DX_KvNeX8Ai`;fMV5`2PEHd<(po
+z*Wuarc64kzS*4RPzufR8W?06l_9>k0Sz61;%*AgXS7OSNkHmF6UuBfq<#p!k)%_6d
+zmko(wWKnvRx1dYR{xTk&Nq7Waq_wJikos`iO0e6CIP&WE<^1gzLNTxN{SYmet%!MK
+zQM#13ppl^j-(1GQOcLVNA1x-Is6L#wB<!{#j(EPxD7DM$%-5^?AzCh5F-NJiW$cEZ
+zo&58GjpRt8BA@c2zvW)B%m=Bza@xXH!Rf~x+wN7<{j5ybF(0PEI@%J=7X4NlGIrZR
+zD`ERf%?76(kY|}%VP;l;<+PQog41Wtvvz-)4-?q$hiJ=eww$BVkgMS;VVlc%7816i
+zosp-QT4APDe{i&tAvm^5Jinl#_up3@bbJ9=me=7EJ(f*a=9lLSF>|}NyPW4PU7G)g
+zORX&vs=w*9^~`5WkMZ(4{g$`(efjOH-scm2m|f@jou{wtJ}|%K>x<vo{`+$OGq;s~
+zfM*;z<7YL$rCs-zrAwc+Z0BX))cW(R`j0tnC3C7XcFPyny!t9={ov60EAw^n(RkTr
+z<@a~)y<zuR16%U61F~;w!Fg8w$DFp3ITgR_*S+6-it{sV)#v3CjhAiq@cfq6EpzvZ
+zWqIPxQb#FIssD2a_3WpLBidAhbKZW-OS%5x<;K=NpXi)yvxn#R6%%?hCuU?*=qTku
+z^`GLjRSlUVetw~4cmMt7LB|(>WqDpc(K*>ycg-*N=gnDrMF1DDqjh%jl=@F`+LGqX
+zK?$cqmj)}#^Y&X_#PydKT9*5KqGz(Na?0i&%iTEgijjOcC)$1xdan#t|LIO!)%=t=
+zQeJ3T?!VtW==cJ#EYHg)S|xkQ^E=Pf!@Hi}GAyw?@4Vz)j#K~U{Kj;n4<G)ae9uAD
+z$wH?uch!Hj!&O1g4-IZ*1dh``N9*US)e|k0&6C5mYNYp!-cz1}p<to+%3bwe?Qm7l
+z^Fzz<#?tevOxU>&pJ<_Mo?(6?<|&gENzkzn&&rHE$jm|qBzM(+gTsaGlu_b6zdWj~
+z_WTAGOvJN9=|e1^mA}oi8jzL$hWX`300IjRQ0@6`XO>ORZ#xS=H@Qopf1Y;8kWbMm
+zSos?HQU?%N%unRYa?=j_I{lmwu5;gLo9q_uiWg}-E1$?6%lf%bU(G^3akcv?pE*F!
+z#SCMMt?Tr&=l8ke!`Y%CxfRi$MevcIYknf@d?-6d&;`X#kr>iJczy>sv2|WP(IMHl
+zKcAGg_e$Cl!y{9+a#@b=EaM=jEgDaWRC8oG`2HnI-G6i(X&d#t{h8Ns{q1WF6Fs~$
+z8bb`4t%&&ucV;<=<&dG>;+(4aNIXIV4&?v>i=n~@YhSeczr_MG_?+~E9_9|=Cg0S2
+zob_-#ADw@rC;1fXAp^EJerWI5!jTkn@W*%gUeI$@aj%HPHBZ`>?=Ks(yd$E#oiN0_
+zE<WCM+Ye}fO;Pfo*@_sll?+)`n8T6WY7gR4H;*G=&Vz)X5>cLh=3*i~Tj+KD<NO%X
+zLA;Lts%g>Ho1)~=PD^LVRx)H~hB+L`t@a=qdndzA9whvfh>PfFE+*nVU&B~o>vi+>
+zYW~r>=!(#7KSV%w`207+@Rw8J5k-`Qyc=7Ys>Gzv$&2PBoT2!<#3Nwdd`fxf`<Ey+
+z9vvEghf3m7=-64Dx1V1<F9*-Rdizl}ntVrOM<E-Ut%#je8dH+vDJf#NJyIUcON|d_
+zeoA@h`<Gll^jt<<Y93qcdVYbT6^G@sYFczih_>5{$?=0Or-mgbnY)xLgy!R|&PO9Y
+zmL+U{==*m|dAXd+C`a1PO!Kh)In>Nsu0LtC{Sa+13|hMtM>N%4dGt7($P@2NpBw&T
+zA59ew9(PR9-gGXN8@_1we*sdKXW`Q}K(tER;e#1RG}V5d_BbbOA04M2`?T5kaR=1x
+zP3Jn}nx!qVJWGF~;38Z<fN(Rn{SckQG0)QNvtYJQX?ytRX8SBua!k?QdM*`jJcRq7
+zX{bIapSA%!zb%%}nx0=By1_Z=JmN;1^_Q+_TeSVP+A$+}n=sAt=uBA5H!N|H@~olq
+zk8h#W{Yv5pdSgdy_774y9w=Jz20qcrZ9kyH?-gw}m~A$6<~v1O3F<tiX!*>gwtclS
+z-_UQXN4LJ~X|cczKGDW)14OIDRyIuA>T2eZHXBSmg{QR5`8u<$1a%%$v^3^Y`I>m|
+zE8%%rkxBpfe4<0ze&9AJx{Zfff^*sS;b%>)bA<v|`?yeIb4d|@_WpGJOhCU+R!ytz
+zolaz%d!{|8jrVa!>s+Cj@B7YOg*HDu;`!~X)_%|!b{x+%RKK53v@yCO^xO~aE{><j
+zxhUqrmzd>JXM5j+m?(9>p15Xdx%c;5DWEJLs3(s20|L<%`~8rSaRmJjf$lnmK-nxF
+zKyfd+pTxId=Y(-Pyy&kH<r`pL#;xaovU|Gt2bwmHaNDPDyX(m2%`42K@sVBSIhRr5
+zqgPMYpJ$)1_tYQFJaj^|L6mW`;Y+uiXsK5VC+Z)Ve0;0LJ69E#^8A*8D$A4di8njE
+z`e>C^hqqmHI&*cqfyu|WTF7%%p5HR9x;*Lp#znG+(EzKKZrkR|%=Ydeb4<~`g0|F%
+z)V^Ig=k4db(bek58*h8KZIbUZ+q;9zF-7|p+EP8gt1qkY&pz*X<82SOP4e9)IFxGw
+z)IkKwi+WgVd9gb*aM?P0KVPkWyl(U@3pB>11QUP;sACF#L8U^^Z~2bm<=N*Q?;4HD
+zg1h26nh8Jy)G-CWol>Famj|}!ubE$d>G8(Vw-DSRm(m~r5!Yv22h{n3varylX@}+6
+z`}u11x4oBd9PJ8`U2(O)xIRP>Xt^E7%y;DZ9loh@>+JJhhOzCyh(YT@l!F&puCCv5
+z`=FVx!}I&~^IN`u+LrVD;@b)H%OZALZXYx~zc(lMJAQvR=NAne0<FvDbu_LIQSSc1
+zvBjgaq+EvHY~~0n{c!W3<7Y%4<P-ggeqe#VWl?(gB1<L!9d~D3AJNG_A02w`G2Z=P
+zzi}DRt_LVuG4P3oY<mxl%HkpeTdv6jpd+T`_D(bF{EqpJ7WL;b0_e#QtG47A=+fsG
+zS@QLv-#NB;R+-<&-u^*OwZA(nGiqLKwf=SDJ-;`<g)p-$FjMaoWq#Y%ZO!ZSb6)>C
+z_l=%J2l6bJuFlpi<^`7+;c|B{e5uHX<|9J4quQF+>F2A>Z@F)DMcaYsTNb5<FS29;
+z&@Hs5n@QO7+kQu}dD-tP&+pA|A<Qg`r;loz(DTbfI_S&JZ(-7QQJCDi&^J5(D+6$S
+zh`8p8+Yf!uZ|Tp~(({{S+J1{J3O;C8h_4*ao0r1%A>v5O?dN6|lX*g~x>tSovoc}l
+zTltjkZ96bxvUOA7Z#jE~C66%Qx8?SLnK?bbJbJDE)_H6%8|LPH+m?%_Lf=Ag_g+Wi
+z`Yhu5Ew=~EB<cBGwK4q7e!g0K+j3<*vvrGkoh45$Pz1Li(9*lhOpJLXG}`Z`a6iw8
+zF32aEv+cd;tG0);_b&BUIfN4gT5daL()0Yz!x+04oX49?I3W0}=6BV!mzvzX><Y!s
+zsJ1blUv9!ddwvHvv6XzdKcltUmg5-c3(j&}xxIc1ZDo3X=eESI=NBkip?o~QH@}oH
+zzbsax+WMZ~wj0&d{?r(D93MS7v>bXnTNlf#30xl|TnMxbVP<eHLvsht+Wl!hOyFie
+zM0cU<SfFoNlpemwk_kXFE7eIR{m}eIW_|O0mE&)Sk4N}(SOU>q+J51nQCVDMV9Pa`
+z0CWotW@gA`=)=DKox;jD#=MM#b3oa3d;wCHJABZSaTXm|1Y%f}KEKG438apT7hH(~
+z^IKlZu-tiHeBAL&L-p18ls?2#n>L(_3~afkqVW7;aIQ8lN4sz7Rm?B9XlVTIl=!PH
+zG0S;z#uZL3L!iBHilg;|>zQBK!TF#eSwuskZy~aQul5($PXS8F!Sg#ef9xK-|Ic1O
+z8j?lMFGdwT4Chh;*AEdF4^X(i=lAUW|4sErfASPVN4s(lr$!H7L@)td+4K8N{omf@
+zMF020YJRzOq0z$^5x95=T-o#6_B@*>>VGa9`dsy+GqX$a6U>4;85#$_Rp6#cCa>xF
+zMW3(4x%yvkao+l)QF&~kxs##4b!>4j+%$#fS6jVx&fEWao%7Zojf$CNftF6e{am)b
+zY02{&_bNcz)@{x6_QTox`Qr7LrbPpDV?%$_<mO#)wGahGEZb3SP0w$O1*Z7`MJpcW
+zQ<~QE3j&_sw$svlxZj4Hyyg5%LpAf^-yn2v5gY>@9e(x??h>MWm3e-(ZQyYKz#N3*
+z2RO0yEIwsyv5frO>Z#8@yiq?c6%0MUbC2=vv-*v5vUYx^p?bxqj3nlldmC+Eg3q|*
+zFCxBd-ch-&oE6Ux#z#s1T$}(}ng!+;KVCcq2cP0nb1wOIp}*s$uf953Kd#*RE7S2S
+zGU*?LPigF2e*OH$P#=Upn#A=0MJvpw#R4<<L|5;R^KpKKcYbhjFTOAIj&T3Xl+5P{
+ze9-4C+MnYi&u@_A`dI_A`wb{sVLmMun8)N(rjk1!8ozfu*X7`=m#6_Eo`?!ra3v9Z
+zaQ-OorZ{H*+$<Xbt{*5`@pC@W?K}w37#S8kCa>1~+|)r}HNP#KFn`Wxl{tOqHy<YO
+z{(gwjz|68J<Czmw%$F`Pzx))gkTo-8{eGVObk(j$nXqF%OhffeJ~1pj7toj{7Cc!`
+z(VRT>svf;s>)gC=Ipz2Qq%6&+04d9l^I6S{PF6TinORPvPZ{bd=-TDSd6ueNPXSVv
+z=2L)_<qjVnBK-aq!7<Q0iJKZ{S(InxG7@r3xz}pBb6-B|c&4G+e3S`0N8{6uQkYRQ
+zPgCm6ndLA|5>ETj@Z+IJ<Kud`dsUl{GGXV{d}7vOnlN#gEI28CIKP|?kKpG<fajOr
+z`%1sMADn+hKK+C9;o)MP^ZW2$P6Zt^tE>*rM++{F>n}jc(tHY#viu<*3>S<1aeR1q
+z;~-~)_WZ`X`{Da4Z(o<ruT0qaVm_<6!vNkZ+JR-5p}&}CxoIwa-xdo@^8t!h%zW;h
+z(3|mX4Q$T!aAfK)h>t7yV*;-r5WkpD{KOCXD~ddOPW@6EoVe_;t6Pp&ChV9G(@<?b
+z%7h*BVH&E<N13o=K1@Tk`6v^1%!g^HHXmiej`=VR)#js2*fAfbq1t?u2|MP)G*p|9
+zGGWJjn1*WeQ6}t|57SU>KFWk0^I;mQ%}1HAV?InnwfQI$cFc!qs5T#E!jAbc4b|qO
+zOxQ6WrlHz=lnFcL!!%Tzk1}D$e3*u6^HC=3m=DuXZ9d9`9rIxts?A54uwy<<L$&!R
+z6L!ppX{a_IWx|g6Fb&n_qfFQ_AEu$&e3S`0=EF2pn~ySK$9$NEYV%Ph?0f;AxPm_>
+zU;-y4z+Xo<b=>i03<o%#X{a_IWx|g6Fb&n_qfFQ_AEu$&e3S`0=EF2pn~ySK$9$NE
+zYV%Ph?3fSJP;EZSgdOu?8mi4lnXqF%OhdK#C=+(fhiRxbA7#Rh`7jOD=A%s5F(0O(
+e+I*A=JLbbQRGW`7VaI%!hHCRsChWYL&;J4VU14zm
+
+literal 25398
+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
+UQM+~^IwZ!&{_Jk}OP}!n19ZBTOaK4?
+
 diff --git a/apps/debug_menu.c b/apps/debug_menu.c
 index c98d54ad64..8f3e244662 100644
 --- a/apps/debug_menu.c
@@ -5099,6 +6497,43 @@ index 440164984b..977d5dd041 100644
  
      /* center y within the available splash box */
      if (y < maxh)
+diff --git a/apps/gui/usb_screen.c b/apps/gui/usb_screen.c
+index b1a12d2d83..4b84806946 100644
+--- a/apps/gui/usb_screen.c
++++ b/apps/gui/usb_screen.c
+@@ -140,7 +140,8 @@ static void usb_screen_fix_viewports(struct screen *screen,
+         logo_height = BMPHEIGHT_usblogo;
+     }
+ 
+-    viewportmanager_theme_enable(screen->screen_type, true, parent);
++    /* Asher OS: full-screen USB picture, no status bar */
++    viewportmanager_theme_enable(screen->screen_type, false, parent);
+ 
+     if (logo_width  > parent->width)
+         logo_width  = parent->width;
+diff --git a/apps/gui/viewport.c b/apps/gui/viewport.c
+index 5f5703bf54..1fafee1800 100644
+--- a/apps/gui/viewport.c
++++ b/apps/gui/viewport.c
+@@ -232,9 +232,15 @@ void viewportmanager_init(void)
+ {
+     FOR_NB_SCREENS(i)
+     {
+-        theme_stack_top[i] = -1; /* the next call fixes this to 0 */
+-        /* We always want the theme enabled by default... */
+-        viewportmanager_theme_enable(i, true, NULL);
++        /* Asher OS: the theme (status bar) starts switched on underneath,
++         * but a "disabled" entry sits on top until the home screen has
++         * drawn, so the bar never flashes up during boot */
++        theme_stack_top[i] = 1;
++        theme_stack[i][0].enabled = true;
++        theme_stack[i][0].vp = NULL;
++        theme_stack[i][1].enabled = false;
++        theme_stack[i][1].vp = NULL;
++        toggle_theme(i, false);
+     }
+     add_event(GUI_EVENT_ACTIONUPDATE, viewportmanager_update);
+ }
 diff --git a/apps/iap/iap-lingo4.c b/apps/iap/iap-lingo4.c
 index d29f4d1612..16504e8791 100644
 --- a/apps/iap/iap-lingo4.c
@@ -5151,15 +6586,16 @@ index 112c4d9257..8b7ff4d209 100644
  </phrase>
  <phrase>
 diff --git a/apps/main.c b/apps/main.c
-index 38bc18925a..5031ab1e84 100644
+index 38bc18925a..0fe78c8d15 100644
 --- a/apps/main.c
 +++ b/apps/main.c
-@@ -1,3 +1,4 @@
+@@ -1,3 +1,5 @@
 +#include "asher/asher_theme.h"
++#include "asher/asher_boot.h"
  /***************************************************************************
   *             __________               __   ___.
   *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
-@@ -265,11 +266,8 @@ int show_logo_boot( void )
+@@ -265,11 +267,8 @@ int show_logo_boot( void )
          lcd_putsxy((LCD_WIDTH/2) - (ver_w/2), 0, version);
      lcd_bmp(&bm_rockboxlogo, (LCD_WIDTH - BMPWIDTH_rockboxlogo) / 2, 16);
  #else
@@ -5173,24 +6609,26 @@ index 38bc18925a..5031ab1e84 100644
  #endif
      lcd_setfont(FONT_UI);
      lcd_update();
-@@ -464,6 +462,7 @@ static void init(void)
+@@ -464,6 +463,8 @@ static void init(void)
      audio_init();
      talk_announce_voice_invalid(); /* notify user w/ voice prompt if voice file invalid */
      settings_apply_skins();
 +    asher_theme_apply_saved();   /* Asher OS: restore chosen theme */
++    asher_boot_logo();           /* cover the status bar the theme just drew */
  
  /* do USB last so prompt (if enabled) can work correctly if USB was inserted with device off,
   * also doesn't hurt that it will display the nice pretty backdrop this way too. */
-@@ -805,6 +804,7 @@ static void init(void)
+@@ -805,6 +806,8 @@ static void init(void)
      CHART("<settings_apply_skins");
      settings_apply_skins();
      CHART(">settings_apply_skins");
 +    asher_theme_apply_saved();   /* Asher OS: restore chosen theme */
++    asher_boot_logo();           /* cover the status bar the theme just drew */
  }
  
  #ifdef CPU_PP
 diff --git a/apps/menus/main_menu.c b/apps/menus/main_menu.c
-index a09d81de3d..7c77b00009 100644
+index a09d81de3d..c12d28ef1d 100644
 --- a/apps/menus/main_menu.c
 +++ b/apps/menus/main_menu.c
 @@ -26,6 +26,9 @@
@@ -5216,7 +6654,7 @@ index a09d81de3d..7c77b00009 100644
  /*      INFO MENU                  */
  /***********************************/
  
-@@ -501,24 +506,20 @@ static int main_menu_config(void)
+@@ -501,24 +506,22 @@ static int main_menu_config(void)
  }
  
  MENUITEM_FUNCTION(main_menu_config_item, 0, ID2P(LANG_MAIN_MENU),
@@ -5237,7 +6675,9 @@ index a09d81de3d..7c77b00009 100644
 -        &recording_settings,
 -#endif
 -#if CONFIG_RTC
++        &asher_shuffle_item,
 +        &asher_click_item,
++        &asher_screen_off_menu,
          &timedate_item,
 -#endif
 -        &main_menu_config_item,
@@ -5247,6 +6687,55 @@ index a09d81de3d..7c77b00009 100644
          );
  /*    MAIN MENU                    */
  /***********************************/
+diff --git a/apps/misc.c b/apps/misc.c
+index 983fbc92f3..906d3cc0b6 100644
+--- a/apps/misc.c
++++ b/apps/misc.c
+@@ -25,6 +25,7 @@
+ #include "string-extra.h"
+ #include "config.h"
+ #include "misc.h"
++#include "asher/asher_power.h"
+ #include "system.h"
+ #include "lcd.h"
+ #include "language.h" /* is_lang_rtl() */
+@@ -374,12 +375,15 @@ static bool clean_shutdown(enum shutdown_type sd_type,
+         int audio_stat = audio_status();
+ #endif
+ 
+-        FOR_NB_SCREENS(i)
+-            viewportmanager_theme_enable(i, true, NULL);
+-        clear_screen_buffer(false);
++        /* Asher OS: retro pop-up that counts down (Menu cancels) */
++        if (!asher_shutdown_countdown())
++        {
++            cancel_shutdown();
++            return false;
++        }
+         FOR_NB_SCREENS(i)
+         {
+-            screens[i].update();
++            viewportmanager_theme_enable(i, false, NULL);   /* no status bar */
+             screens[i].scroll_stop();
+         }
+ 
+@@ -393,14 +397,14 @@ static bool clean_shutdown(enum shutdown_type sd_type,
+                 splash(HZ, ID2P(LANG_TAGCACHE_BUSY));
+                 FOR_NB_SCREENS(i)
+                     viewportmanager_theme_undo(i, false);
++                asher_shutdown_aborted();
+                 return false;
+             }
+ #endif
+             level = battery_level();
+             if (level > 10 || level < 0)
+             {
+-                if (global_settings.show_shutdown_message)
+-                    splash(0, str(LANG_SHUTTINGDOWN));
++                /* the countdown pop-up is still showing */
+             }
+             else
+             {
 diff --git a/apps/plugins/battery_bench.c b/apps/plugins/battery_bench.c
 index 5a129c6136..8e66ac6512 100644
 --- a/apps/plugins/battery_bench.c
@@ -5418,7 +6907,7 @@ index a4a1811a18..2f656a991c 100644
      rb->lcd_setfont(FONT_SYSFIXED);
      count1 = count2 = count3 = count4 = 0;
 diff --git a/apps/root_menu.c b/apps/root_menu.c
-index 918669b245..24bb2243f2 100644
+index 918669b245..516e4226a2 100644
 --- a/apps/root_menu.c
 +++ b/apps/root_menu.c
 @@ -25,6 +25,10 @@
@@ -5432,7 +6921,7 @@ index 918669b245..24bb2243f2 100644
  #include "lang.h"
  #include "settings.h"
  #include "screens.h"
-@@ -348,30 +352,21 @@ static int wpsscrn(void* param)
+@@ -348,30 +352,12 @@ static int wpsscrn(void* param)
      if (audstatus)
      {
          talk_shutup();
@@ -5440,37 +6929,34 @@ index 918669b245..24bb2243f2 100644
 +        ret_val = asher_nowplaying();
      }
 -    else if (global_status.resume_index != -1)
-+    else
-     {
+-    {
 -        DEBUGF("Resume index %d crc32 %lX offset %lX\n",
 -               global_status.resume_index,
 -               (unsigned long)global_status.resume_crc32,
 -               (unsigned long)global_status.resume_offset);
 -        if (playlist_resume() != -1)
-+        /* Asher OS: nothing playing -> load the last song but stay paused */
-+        if (global_status.resume_index != -1 && playlist_resume() != -1)
-         {
-             playlist_resume_track(global_status.resume_index,
-                 global_status.resume_crc32,
-                 global_status.resume_elapsed,
-                 global_status.resume_offset);
+-        {
+-            playlist_resume_track(global_status.resume_index,
+-                global_status.resume_crc32,
+-                global_status.resume_elapsed,
+-                global_status.resume_offset);
 -            ret_val = gui_wps_show();
-+            audio_pause();
-+            get_wps_state()->paused = true;
-         }
+-        }
 -    }
 -    else if (!file_exists(PLAYLIST_CONTROL_FILE))
 -        splash(HZ*2, ID2P(LANG_NOTHING_TO_RESUME));
 -    else if (yesno_pop(ID2P(LANG_REPLAY_FINISHED_PLAYLIST)) &&
 -             playlist_resume() != -1)
--    {
++    else
+     {
 -        playlist_start(0, 0, 0);
 -        ret_val = gui_wps_show();
++        asher_resume_paused();   /* Asher OS: load the last song, stay paused */
 +        ret_val = asher_nowplaying();
      }
  
      if (ret_val == GO_TO_PLAYLIST_VIEWER
-@@ -506,7 +501,7 @@ static int item_callback(int action,
+@@ -506,7 +492,7 @@ static int item_callback(int action,
  MENUITEM_RETURNVALUE(shortcut_menu, ID2P(LANG_SHORTCUTS), GO_TO_SHORTCUTMENU,
                          NULL, Icon_Bookmark);
  
@@ -5479,7 +6965,7 @@ index 918669b245..24bb2243f2 100644
                          NULL, Icon_file_view_menu);
  #ifdef HAVE_TAGCACHE
  MENUITEM_RETURNVALUE(db_browser, ID2P(LANG_TAGCACHE), GO_TO_DBBROWSER,
-@@ -545,17 +540,18 @@ MENUITEM_RETURNVALUE(system_menu_, ID2P(LANG_SYSTEM), GO_TO_SYSTEM_SCREEN,
+@@ -545,17 +531,18 @@ MENUITEM_RETURNVALUE(system_menu_, ID2P(LANG_SYSTEM), GO_TO_SYSTEM_SCREEN,
  
  struct menu_item_ex root_menu_;
  static struct menu_callback_with_desc root_menu_desc = {
@@ -5503,7 +6989,7 @@ index 918669b245..24bb2243f2 100644
  #ifdef HAVE_RECORDING
      { "recording", &rec },
  #endif
-@@ -650,11 +646,11 @@ void root_menu_set_default(void* setting, void* defaultval)
+@@ -650,11 +637,11 @@ void root_menu_set_default(void* setting, void* defaultval)
      root_menu_.submenus = (const struct menu_item_ex **)&root_menu__;
      root_menu_.callback_and_desc = &root_menu_desc;
  
@@ -5517,7 +7003,7 @@ index 918669b245..24bb2243f2 100644
      *(bool*)setting = false;
  }
  
-@@ -698,7 +694,8 @@ static int get_selection(int last_screen)
+@@ -698,7 +685,8 @@ static int get_selection(int last_screen)
      int len = ARRAYLEN(root_menu__);
      for(i=0; i < len; i++)
      {
@@ -5527,7 +7013,7 @@ index 918669b245..24bb2243f2 100644
              (root_menu__[i]->value == last_screen))
          {
              return i;
-@@ -944,6 +941,7 @@ void root_menu(void)
+@@ -944,6 +932,7 @@ void root_menu(void)
      int selected = 0;
      int shortcut_origin = GO_TO_ROOT;
  
@@ -5535,7 +7021,7 @@ index 918669b245..24bb2243f2 100644
      push_current_activity(ACTIVITY_MAINMENU);
      next_screen = root_menu_setup_screens();
  
-@@ -962,7 +960,7 @@ void root_menu(void)
+@@ -962,7 +951,7 @@ void root_menu(void)
                   * button to be handled by HOST instead of rockbox */
                  ignore_back_button_stub(true);
  
@@ -5543,6 +7029,111 @@ index 918669b245..24bb2243f2 100644
 +                next_screen = asher_home(&root_menu_, &selected);
  
                  ignore_back_button_stub(false);
+ 
+diff --git a/firmware/backlight.c b/firmware/backlight.c
+index 781434e07b..8099235b3c 100644
+--- a/firmware/backlight.c
++++ b/firmware/backlight.c
+@@ -480,9 +480,54 @@ static void backlight_setup_fade_down(void)
+ }
+ #endif /* CONFIG_BACKLIGHT_FADING */
+ 
++#if defined(IPOD_6G) && !defined(BOOTLOADER) && !defined(SIMULATOR) && !BACKLIGHT_FADE_IN_THREAD
++/* Asher OS: the screen fades out over two seconds instead of snapping off.
++ * Any button or the wheel during the fade brings it straight back. */
++#define ASHER_BL_FADE
++#define ASHER_FADE_TICKS (2 * HZ)
++#define ASHER_FADE_STEP  (HZ / 25)
++static long asher_fade_start;
++static bool asher_fading, asher_dark;
++
++void lcd_set_dim(int level);    /* lcd-s5l8702.c: 256 normal .. 0 black */
++
++static void asher_fade_step(void)
++{
++    long t = current_tick - asher_fade_start;
++    if (t >= ASHER_FADE_TICKS)
++    {
++        lcd_set_dim(0);
++        asher_fading = false;
++        asher_dark = true;
++        backlight_hw_off();
++#ifdef HAVE_LCD_SLEEP
++        backlight_lcd_sleep_countdown(true);
++#endif
++        return;
++    }
++    long r = ASHER_FADE_TICKS - t;
++    /* the picture itself fades smoothly to black (the backlight alone
++     * can't go dark enough, it would "cut" at the end) ... */
++    lcd_set_dim((int)(256 * r / ASHER_FADE_TICKS));
++    /* ... while the backlight eases down to half to save power */
++    int lvl = backlight_brightness / 2
++              + (int)((long)backlight_brightness * r / (2 * ASHER_FADE_TICKS));
++    backlight_hw_brightness(MAX(lvl, MIN_BRIGHTNESS_SETTING));
++}
++#endif
++
+ static inline void do_backlight_off(void)
+ {
+     backlight_timer = 0;
++#ifdef ASHER_BL_FADE
++    if (!asher_fading && !asher_dark)
++    {
++        asher_fading = true;
++        asher_fade_start = current_tick;
++        asher_fade_step();
++    }
++    return;
++#endif
+ #if BACKLIGHT_FADE_IN_THREAD
+     backlight_setup_fade_down();
+ #else
+@@ -527,7 +572,16 @@ static void backlight_update_state(void)
+ #if BACKLIGHT_FADE_IN_THREAD
+         backlight_setup_fade_up();
+ #else
++#ifdef ASHER_BL_FADE
++        bool was_dim = asher_fading || asher_dark;
++        asher_fading = asher_dark = false;          /* cancel any fade */
++        backlight_hw_brightness(backlight_brightness);
++#endif
+         backlight_hw_on();
++#ifdef ASHER_BL_FADE
++        if (was_dim)
++            lcd_set_dim(256);                       /* picture back to normal */
++#endif
+ #endif
+     }
+ }
+@@ -558,6 +612,11 @@ static void backlight_queue_wait(struct queue_event *ev)
+     if (backlight_fading_state != NOT_FADING)
+         queue_wait_w_tmo(&backlight_queue, ev, FADE_DELAY);
+     else
++#endif
++#ifdef ASHER_BL_FADE
++    if (asher_fading)
++        queue_wait_w_tmo(&backlight_queue, ev, ASHER_FADE_STEP);
++    else
+ #endif
+         queue_wait_w_tmo(&backlight_queue, ev, BACKLIGHT_THREAD_TIMEOUT);
+ }
+@@ -694,9 +753,16 @@ void backlight_thread(void)
+ #endif
+                 break;
+             case SYS_TIMEOUT:
++#ifdef ASHER_BL_FADE
++                if (asher_fading) { asher_fade_step(); break; }
++#endif
+                 backlight_handle_timeout();
+                 break;
+         }
++#ifdef ASHER_BL_FADE
++        if (asher_fading && ev.id != SYS_TIMEOUT)
++            asher_fade_step();      /* keep fading even when other events arrive */
++#endif
+     } /* end while */
+ }
  
 diff --git a/firmware/drivers/ramdisk.c b/firmware/drivers/ramdisk.c
 index 2071529e29..ccbdf8113b 100644
@@ -5618,6 +7209,43 @@ index 5a5ef2ccae..2ceb3d3b0c 100644
  
  #define USB_NONE
  
+diff --git a/firmware/powermgmt.c b/firmware/powermgmt.c
+index e89c0ce034..bdb5a4859a 100644
+--- a/firmware/powermgmt.c
++++ b/firmware/powermgmt.c
+@@ -447,6 +447,32 @@ static void battery_status_update(void)
+         time_now = 0;
+ #endif
+ 
++#if defined(IPOD_6G) && !defined(SIMULATOR) && !defined(BOOTLOADER)
++    /* Asher OS: a steady battery %. Charging raises the voltage reading, so
++     * plugging in or out used to make the number jump. Now it only climbs
++     * while plugged in and only drops while unplugged, 1% at a time. */
++    {
++        static int shown = -1;
++        static long next_step;
++        if (level >= 0)
++        {
++            if (shown < 0)
++                shown = level;
++            else if (TIME_AFTER(current_tick, next_step))
++            {
++                bool plugged = charger_inserted();
++                if (plugged && level > shown)
++                    shown++, next_step = current_tick + 20 * HZ;
++                else if (plugged && !charging_state() && shown < 100
++                         && voltage_now >= 4150)
++                    shown++, next_step = current_tick + 20 * HZ;   /* charged */
++                else if (!plugged && level < shown)
++                    shown--, next_step = current_tick + 20 * HZ;
++            }
++            level = shown;
++        }
++    }
++#endif
+     percent_now = level;
+     send_battery_level_event(level);
+ }
 diff --git a/firmware/target/arm/ata-nand-telechips.c b/firmware/target/arm/ata-nand-telechips.c
 index c7954e3188..e59255a3b4 100644
 --- a/firmware/target/arm/ata-nand-telechips.c
@@ -5644,6 +7272,35 @@ index 6b62f3bab7..c1e431e1c1 100644
      info->product = "Internal Storage";
      info->revision = "0.00";
  }
+diff --git a/firmware/target/arm/ipod/button-clickwheel.c b/firmware/target/arm/ipod/button-clickwheel.c
+index 1f4ca13dc8..d4ecce77e1 100644
+--- a/firmware/target/arm/ipod/button-clickwheel.c
++++ b/firmware/target/arm/ipod/button-clickwheel.c
+@@ -445,7 +445,24 @@ int button_read_device(void)
+ 
+     /* normal buttons */
+     hold_button_old = hold_button;
++#if CONFIG_CPU==S5L8702
++    {
++        /* Asher OS: the hold switch must read the same for a few ticks
++         * before it counts, so a bouncy switch can't flash the screen on */
++        static bool pending;
++        static int stable;
++        bool now = button_hold();
++        if (now != hold_button)
++        {
++            if (now != pending) { pending = now; stable = 0; }
++            if (++stable >= 4) hold_button = now;
++        }
++        else
++            stable = 0, pending = now;
++    }
++#else
+     hold_button = button_hold();
++#endif
+ 
+     if (hold_button != hold_button_old)
+     {
 diff --git a/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c b/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c
 index 57ee0a9cd0..983a5ce622 100644
 --- a/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c
@@ -5675,6 +7332,21 @@ index a4489dd8ff..3f1c7c60a4 100644
  
  #ifdef BOOTLOADER
  #include <inttypes.h>
+diff --git a/firmware/target/arm/s5l8702/ipod6g/powermgmt-6g.c b/firmware/target/arm/s5l8702/ipod6g/powermgmt-6g.c
+index 4af1d29889..1075f8b938 100644
+--- a/firmware/target/arm/s5l8702/ipod6g/powermgmt-6g.c
++++ b/firmware/target/arm/s5l8702/ipod6g/powermgmt-6g.c
+@@ -39,7 +39,9 @@ unsigned short percent_to_volt_discharge[11] =
+ /* voltages (millivolt) of 0%, 10%, ... 100% when charging enabled */
+ unsigned short percent_to_volt_charge[11] =
+ {
+-    3700, 3820, 3900, 3950, 3990, 4030, 4070, 4120, 4170, 4190, 4200
++    /* Asher OS: closer to the unplugged curve, so plugging in doesn't
++     * make the battery look much emptier than it is */
++    3530, 3700, 3750, 3780, 3800, 3830, 3890, 3950, 4010, 4100, 4190
+ };
+ #endif /* CONFIG_CHARGING */
+ 
 diff --git a/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c b/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c
 index 9509e1c0b8..fead002073 100644
 --- a/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c
@@ -5688,6 +7360,60 @@ index 9509e1c0b8..fead002073 100644
      info->product = "Nano 3G NAND";
      info->revision = "chk1";
  }
+diff --git a/firmware/target/arm/s5l8702/lcd-s5l8702.c b/firmware/target/arm/s5l8702/lcd-s5l8702.c
+index 1c87d37da0..d2f152dcc5 100644
+--- a/firmware/target/arm/s5l8702/lcd-s5l8702.c
++++ b/firmware/target/arm/s5l8702/lcd-s5l8702.c
+@@ -406,6 +406,33 @@ static void displaylcd_wait_dma(void)
+ }
+ 
+ /* Update a fraction of the display. */
++#if defined(IPOD_6G) && !defined(BOOTLOADER)
++/* Asher OS: the picture can be dimmed toward black (screen fade-out),
++ * 256 = normal, 0 = black. Only the copy sent to the LCD is dimmed. */
++static int lcd_dim = 256;
++
++static void dim_copy(uint16_t *out, const fb_data *p, int n, int d)
++{
++    while (n--)
++    {
++        unsigned v = *p++;
++        unsigned r = ((v >> 11) * d) >> 8;
++        unsigned g = (((v >> 5) & 63) * d) >> 8;
++        unsigned b = ((v & 31) * d) >> 8;
++        *out++ = (r << 11) | (g << 5) | b;
++    }
++}
++
++void lcd_set_dim(int level)
++{
++    if (level < 0) level = 0;
++    if (level > 256) level = 256;
++    if (level == lcd_dim) return;
++    lcd_dim = level;
++    lcd_update();
++}
++#endif
++
+ void lcd_update_rect(int, int, int, int) ICODE_ATTR;
+ void lcd_update_rect(int x, int y, int width, int height)
+ {
+@@ -431,6 +458,15 @@ void lcd_update_rect(int x, int y, int width, int height)
+         displaylcd_setup(x, y, width, height);
+ 
+         /* Copy display bitmap to hardware */
++#if defined(IPOD_6G) && !defined(BOOTLOADER)
++        if (lcd_dim < 256) {
++            do {
++                dim_copy(out, p, width, lcd_dim);
++                p += LCD_WIDTH;
++                out += width;
++            } while (--height);
++        } else
++#endif
+         if (LCD_WIDTH == width) {
+             /* Write all lines at once */
+             memcpy(out, p, pixels * 2);
 diff --git a/firmware/target/arm/tms320dm320/debug-dm320.c b/firmware/target/arm/tms320dm320/debug-dm320.c
 index badf272dcf..4257d1508d 100644
 --- a/firmware/target/arm/tms320dm320/debug-dm320.c
