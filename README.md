@@ -3,14 +3,14 @@
 A custom operating system for iPods, built on [Rockbox](https://www.rockbox.org/).
 It dual boots with Apple's own software, so the iPod can always go back to it.
 
-Current version: **2.4.8**
+Current version: **2.4.9**
 
 ## Supported iPods
 
 | iPod | Build |
 |---|---|
 | iPod Classic 6th / 7th gen | `ipod6g` |
-| iPod Video 5th / 5.5 gen (60/80 GB, 64 MB RAM) | `ipodvideo --ram=64` |
+| iPod Video 5th / 5.5 gen (30, 60 and 80 GB; the 64 MB build fits itself to 32 MB) | `ipodvideo --ram=64` |
 | iPod nano 3rd gen | `ipodnano3g` |
 
 ## What's in this repo

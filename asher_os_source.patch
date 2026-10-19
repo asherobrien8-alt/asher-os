@@ -924,10 +924,10 @@ index 0000000000..3156836e43
 +#endif
 diff --git a/apps/asher/asher_media.c b/apps/asher/asher_media.c
 new file mode 100644
-index 0000000000..27407c54e0
+index 0000000000..4b22d9f8e5
 --- /dev/null
 +++ b/apps/asher/asher_media.c
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,115 @@
 +/* Asher OS music controls shared by several screens. */
 +#include "config.h"
 +#include "system.h"
@@ -937,6 +937,7 @@ index 0000000000..27407c54e0
 +#include "metadata.h"
 +#include "misc.h"
 +#include "settings.h"
++#include "playlist.h"
 +#include "gui/wps.h"
 +#include "asher_music.h"
 +#include "asher_media.h"
@@ -945,6 +946,13 @@ index 0000000000..27407c54e0
 +{
 +    struct wps_state *ws = get_wps_state();
 +    int st = audio_status();
++    if (!st && asher_queue_unstarted)
++    {
++        /* songs were added to the queue while nothing was loaded */
++        asher_queue_unstarted = false;
++        playlist_start(0, 0, 0);
++        return;
++    }
 +    if (!st)
 +    {
 +        asher_resume_paused();             /* nothing loaded: the last song */
@@ -1173,10 +1181,10 @@ index 0000000000..303fd28d90
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000000..4ea620fb4d
+index 0000000000..777413932e
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,1903 @@
+@@ -0,0 +1,2005 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -1435,6 +1443,39 @@ index 0000000000..4ea620fb4d
 +    return 0;
 +}
 +
++/* ---- the play queue survives starting something else ---------------
++ * Queued songs are kept aside when a new playlist is made and put back in
++ * front of it once it starts, so songs queued from different playlists
++ * stay in one queue */
++#define QKEEP 60
++static char qk_path[QKEEP][MAX_PATH];
++static int qk_n;
++static void queue_keep(void)
++{
++    struct playlist_info *pl = playlist_get_current();
++    struct playlist_track_info info;
++    qk_n = 0;
++    if (!pl->started || pl->amount <= 0 || pl->index < 0) return;
++    for (int ahead = 1; pl->index + ahead < pl->amount && qk_n < QKEEP; ahead++)
++        if (playlist_is_queued_ahead(ahead)
++            && playlist_get_track_info(NULL, pl->index + ahead, &info) >= 0)
++            strlcpy(qk_path[qk_n++], info.filename, MAX_PATH);
++}
++static void queue_restore(void)
++{
++    for (int k = 0; k < qk_n; k++)
++        playlist_insert_track(NULL, qk_path[k], PLAYLIST_INSERT, true, k == qk_n - 1);
++    qk_n = 0;
++}
++/* a new playlist, keeping what's queued */
++static int new_playlist(void)
++{
++    queue_keep();
++    return playlist_create(NULL, NULL);
++}
++/* songs added while nothing was loaded: the list waits for Play */
++bool asher_queue_unstarted;
++
 +/* start the current playlist at 'start'; honours the Shuffle setting.
 + * force_shuffle: shuffle everything (the Shuffle item) */
 +static int begin_play(int start, bool force_shuffle)
@@ -1454,7 +1495,9 @@ index 0000000000..4ea620fb4d
 +        int r = playlist_shuffle(current_tick, force_shuffle ? -1 : start);
 +        start = force_shuffle ? 0 : r;
 +    }
++    asher_queue_unstarted = false;
 +    playlist_start(start, 0, 0);
++    queue_restore();
 +    return playback_started();
 +}
 +
@@ -1738,7 +1781,7 @@ index 0000000000..4ea620fb4d
 +    const char *msg = shuffle ? "SHUFFLING" : "LOADING MUSIC";
 +    aui_begin();
 +    loading_screen(msg, NULL);
-+    if (playlist_create(NULL, NULL) < 0 || !tagcache_search(&tcs, tag_filename))
++    if (new_playlist() < 0 || !tagcache_search(&tcs, tag_filename))
 +        { aui_end(); return 0; }
 +    if (playlist_insert_context_create(NULL, &ctx, PLAYLIST_INSERT_LAST, false, false) < 0)
 +        { tagcache_search_finish(&tcs); aui_end(); return 0; }
@@ -1794,7 +1837,7 @@ index 0000000000..4ea620fb4d
 +    /* no database yet: shuffle every song on the disk */
 +    aui_begin();
 +    loading_screen("SHUFFLING", NULL);
-+    playlist_create(NULL, NULL);
++    new_playlist();
 +    playlist_insert_directory(NULL, "/", PLAYLIST_INSERT_LAST, false, true, NULL);
 +    if (playlist_amount() > 0)
 +        return begin_play(0, true);
@@ -1830,19 +1873,27 @@ index 0000000000..4ea620fb4d
 + * anything queued before it), then the playlist carries on as before */
 +static void queue_add(const char *path)
 +{
-+    if (!(audio_status() & AUDIO_STATUS_PLAY))
++    struct playlist_info *pl = playlist_get_current();
++    loading_screen("LOADING", NULL);            /* the record player */
++    if (!(audio_status() & AUDIO_STATUS_PLAY) && (!pl->started || playlist_amount() <= 0
++                                                  || asher_queue_unstarted))
 +    {
-+        /* nothing playing: just play it */
-+        if (playlist_create(NULL, NULL) >= 0
++        /* nothing loaded at all: start a list that waits for Play, so
++         * adding a song never starts it by itself */
++        if ((asher_queue_unstarted || playlist_create(NULL, NULL) >= 0)
 +            && playlist_insert_track(NULL, path, PLAYLIST_INSERT_LAST, false, true) >= 0)
 +        {
-+            playlist_start(0, 0, 0);
-+            splash(HZ, "Playing");
++            asher_queue_unstarted = true;
++            int n = playlist_amount();
++            if (n <= 1) splash(HZ * 3 / 2, "Added to Queue - press Play to start");
++            else splashf(HZ * 3 / 2, "Added to Queue (%d songs) - press Play to start", n);
 +        }
 +        else
-+            splash(HZ * 3 / 2, "Couldn't play that song");
++            splash(HZ * 3 / 2, "Couldn't add that song");
 +        return;
 +    }
++    /* something is playing (or paused): it plays after the current song,
++     * or right away if you skip */
 +    if (playlist_insert_track(NULL, path, PLAYLIST_INSERT, true, true) < 0)
 +    {
 +        splash(HZ * 3 / 2, "Couldn't add that song");
@@ -1855,6 +1906,7 @@ index 0000000000..4ea620fb4d
 +
 +static void queue_cancel(void)
 +{
++    loading_screen("LOADING", NULL);
 +    int k = playlist_cancel_queue();
 +    if (k == 1) splash(HZ, "Queue cancelled (1 song)");
 +    else splashf(HZ, "Queue cancelled (%d songs)", k);
@@ -2703,7 +2755,7 @@ index 0000000000..4ea620fb4d
 +    struct playlist_insert_context ctx;
 +    aui_begin();
 +    loading_screen("LOADING", NULL);
-+    if (playlist_create(NULL, NULL) < 0
++    if (new_playlist() < 0
 +        || playlist_insert_context_create(NULL, &ctx, PLAYLIST_INSERT_LAST, false, false) < 0)
 +        { aui_end(); splash(2 * HZ, "Couldn't load those songs"); return 0; }
 +    int cap = queue_cap();
@@ -2822,7 +2874,7 @@ index 0000000000..4ea620fb4d
 +    playing_pl[0] = '\0';          /* a mix of all of them, not one */
 +    aui_begin();
 +    loading_screen("LOADING", NULL);
-+    if (playlist_create(NULL, NULL) < 0
++    if (new_playlist() < 0
 +        || playlist_insert_context_create(NULL, &ctx, PLAYLIST_INSERT_LAST, false, false) < 0)
 +        { aui_end(); return; }
 +    mix_count = 0;
@@ -2841,7 +2893,9 @@ index 0000000000..4ea620fb4d
 +    settings_save();
 +    int start = playlist_shuffle(current_tick, cur[0] ? 0 : -1);
 +    if (!cur[0]) start = 0;
++    asher_queue_unstarted = false;
 +    playlist_start(start, cur[0] ? elapsed : 0, cur[0] ? offset : 0);
++    queue_restore();
 +    if (st & AUDIO_STATUS_PAUSE)
 +    {
 +        audio_pause();
@@ -2873,6 +2927,59 @@ index 0000000000..4ea620fb4d
 +/* ------------------------------------------------------------------ */
 +/* Music menu                                                          */
 +/* ------------------------------------------------------------------ */
++static int queue_screen(void);
++/* Now Playing: hold Play opens the queue */
++int asher_queue_screen(void) { return queue_screen(); }
++/* the song after this one, for Now Playing (false if none) */
++bool asher_up_next(char *buf, size_t n, bool *queued)
++{
++    struct playlist_info *pl = playlist_get_current();
++    struct playlist_track_info info;
++    buf[0] = 0;
++    if (queued) *queued = false;
++    if (!pl->started || pl->amount <= 1 || pl->index < 0) return false;
++    int idx = pl->index + 1;
++    if (idx >= pl->amount)
++    {
++        if (global_settings.repeat_mode != REPEAT_ALL
++            && global_settings.repeat_mode != REPEAT_SHUFFLE) return false;
++        idx = 0;
++    }
++    if (queued) *queued = playlist_is_queued_ahead(1);
++    /* the same answer as last time while nothing moved (Now Playing asks
++     * every second; this keeps the hard drive out of it) */
++    static int c_idx = -1, c_amt = -1;
++    static char c_buf[160];
++    if (c_idx == pl->index && c_amt == pl->amount && c_buf[0])
++    {
++        strlcpy(buf, c_buf, n);
++        return true;
++    }
++    c_idx = pl->index; c_amt = pl->amount; c_buf[0] = 0;
++    /* the playlist says what's next; the library gives its name */
++    if (playlist_get_track_info(NULL, idx, &info) >= 0)
++    {
++        int e = lib_handle > 0 ? lib_find(info.filename) : -1;
++        struct mp3entry *nx = audio_next_track();
++        if (e >= 0) snprintf(buf, n, "%s - %s", T(e), AR(e));
++        else if (nx && nx->title && nx->title[0] && !strcmp(nx->path, info.filename))
++        {
++            if (nx->artist && nx->artist[0]) snprintf(buf, n, "%s - %s", nx->title, nx->artist);
++            else strlcpy(buf, nx->title, n);
++        }
++        else
++        {
++            const char *b = strrchr(info.filename, '/');
++            strlcpy(buf, b ? b + 1 : info.filename, n);
++            char *dot = strrchr(buf, '.');
++            if (dot && dot != buf) *dot = '\0';
++        }
++    }
++    else return false;
++    strlcpy(c_buf, buf, sizeof(c_buf));
++    return true;
++}
++
 +static const char *music_items[] = { "Playlists", "Shuffle", "All Songs", "Search", "Artists",
 +                                     "Organize", "Queue" };
 +
@@ -2965,7 +3072,10 @@ index 0000000000..4ea620fb4d
 +}
 +static int queue_screen(void)
 +{
++    aui_begin();
++    loading_screen("LOADING", NULL);            /* the record player */
 +    queue_build();
++    aui_end();
 +    if (q_n == 0) { splash(HZ * 3 / 2, "Nothing playing"); return 0; }
 +    struct aui_list l = { 0 };
 +    l.title = "Queue"; l.count = q_n; l.two_line = true;
@@ -3082,16 +3192,19 @@ index 0000000000..4ea620fb4d
 +                  library_rebuild, NULL, Icon_NOICON);
 diff --git a/apps/asher/asher_music.h b/apps/asher/asher_music.h
 new file mode 100644
-index 0000000000..4e689e7540
+index 0000000000..8108e9199c
 --- /dev/null
 +++ b/apps/asher/asher_music.h
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,16 @@
 +#ifndef ASHER_MUSIC_H
 +#define ASHER_MUSIC_H
 +#include <stdbool.h>
 +#include "menu.h"
 +int asher_music(void);                         /* Music menu; GO_TO_* or 0 */
 +int asher_nowplaying(void);                    /* custom Now Playing screen */
++int asher_queue_screen(void);                  /* Music > Queue */
++bool asher_up_next(char *buf, size_t n, bool *queued);   /* the next song */
++extern bool asher_queue_unstarted;             /* queued while nothing loaded */
 +void asher_resume_paused(void);                /* load the last song, paused */
 +void asher_shuffle_set(bool on);               /* shuffle on/off (also what's playing) */
 +void asher_shuffle_playlists(void);            /* mix every playlist together */
@@ -3101,10 +3214,10 @@ index 0000000000..4e689e7540
 +#endif
 diff --git a/apps/asher/asher_nowplaying.c b/apps/asher/asher_nowplaying.c
 new file mode 100644
-index 0000000000..f0a4565845
+index 0000000000..737ca190a2
 --- /dev/null
 +++ b/apps/asher/asher_nowplaying.c
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,472 @@
 +/* Asher OS Now Playing: album art, song + artist, play/pause status,
 + * kbps, elapsed / total time. The background is the album art blown up
 + * and blurred (or a soft colour blend when a song has no art). */
@@ -3374,6 +3487,17 @@ index 0000000000..f0a4565845
 +        if (!playing) strlcpy(buf, "0:00", sizeof(buf));
 +    }
 +    aui_text(AF_SMALLR, AUI_W - 22, by - 5, sc, buf, 70, 2);
++    if (playing)
++    {
++        /* the song after this one, under the buttons */
++        char nx[120], line[140];
++        bool q = false;
++        if (asher_up_next(nx, sizeof(nx), &q))
++        {
++            snprintf(line, sizeof(line), "%s: %s", q ? "Queued next" : "Up next", nx);
++            aui_text(AF_SMALLR, AUI_W / 2, cy + 20, q ? 0x007aff : sc, line, AUI_W - 40, 1);
++        }
++    }
 +    aui_topbar_text("Now Playing");
 +    aui_update();
 +}
@@ -3425,10 +3549,20 @@ index 0000000000..f0a4565845
 +        if (l2[0]) { aui_text(AF_BIG, COL_X, y, tc, l2, COL_W, 0); y += 22; }
 +        aui_text(AF_MED, COL_X, y + 4,
 +                 sc, (id3->artist && id3->artist[0]) ? id3->artist : "Unknown Artist", COL_W, 0);
-+        if (id3->bitrate)
 +        {
-+            snprintf(buf, sizeof(buf), "%d kbps", id3->bitrate);
-+            aui_text(AF_SMALLR, COL_X, ART_Y + ART - 14, sc, buf, COL_W, 0);
++            /* the song after this one (was the kbps line) */
++            char nx[120], line[140];
++            bool q = false;
++            if (asher_up_next(nx, sizeof(nx), &q))
++            {
++                snprintf(line, sizeof(line), "%s: %s", q ? "Queued next" : "Up next", nx);
++                aui_text(AF_SMALLR, COL_X, ART_Y + ART - 14, q ? 0x9fd8ff : sc, line, COL_W, 0);
++            }
++            else if (id3->bitrate)
++            {
++                snprintf(buf, sizeof(buf), "%d kbps", id3->bitrate);
++                aui_text(AF_SMALLR, COL_X, ART_Y + ART - 14, sc, buf, COL_W, 0);
++            }
 +        }
 +        aui_text(AF_SMALLR, COL_X, ART_Y + ART - 30,
 +                 global_settings.playlist_shuffle ? 0x9fd8ff : sc,
@@ -3522,10 +3656,14 @@ index 0000000000..f0a4565845
 +        }
 +        switch (a)
 +        {
-+            case ACTION_WPS_STOP:
-+                audio_stop();
-+                aui_end();
-+                return GO_TO_PREVIOUS;
++            case ACTION_WPS_STOP:              /* hold Play: the queue */
++            {
++                action_wait_for_release();
++                int r = asher_queue_screen();
++                if (r > 0) { aui_end(); return r; }
++                next_text = 0;
++                break;
++            }
 +            case ACTION_WPS_BROWSE:            /* centre button: shuffle on/off */
 +                asher_shuffle_set(!global_settings.playlist_shuffle);
 +                shuf_until = current_tick + HZ * 3 / 2;
@@ -4253,7 +4391,7 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..af0f5a0e78
+index 0000000000..e3818588b8
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,577 @@
@@ -4280,7 +4418,7 @@ index 0000000000..af0f5a0e78
 +#include "button.h"
 +#include "asher_check.h"
 +
-+#define ASHER_OS_VERSION "2.4.8"
++#define ASHER_OS_VERSION "2.4.9"
 +#if defined(IPOD_VIDEO)
 +#define MODEL_LABEL "iPod Video (5th/5.5 gen)"
 +#elif defined(IPOD_NANO3G)
@@ -11800,6 +11938,32 @@ index 983fbc92f3..634be39f2a 100644
      if (button&BUTTON_REPEAT)
          last_button = button;
      else
+diff --git a/apps/playback.c b/apps/playback.c
+index d69b28cd2c..690d99f471 100644
+--- a/apps/playback.c
++++ b/apps/playback.c
+@@ -1080,7 +1080,21 @@ static void audio_reset_buffer(void)
+     }
+     if (core_allocatable() < pcmbuf_size_reqd())
+         talk_buffer_set_policy(TALK_BUFFER_LOOSE); /* back off voice buffer */
++    /* Asher OS: short of memory? let go of the Asher OS memory reserve
++     * first (screens then share with the music, which can pause it for a
++     * moment, but never crash) */
++    if (core_allocatable() < 2 * 1024 * 1024)
++    {
++        extern void asher_mem_lend(void);
++        asher_mem_lend();
++    }
+     audiobuf_handle = core_alloc_maximum(&filebuflen, &ops);
++    for (int tries = 0; audiobuf_handle <= 0 && tries < 30; tries++)
++    {
++        /* something else holds all of it for a moment: wait and retry */
++        sleep(HZ / 10);
++        audiobuf_handle = core_alloc_maximum(&filebuflen, &ops);
++    }
+ 
+     if (audiobuf_handle > 0)
+         audio_reset_buffer_noalloc(core_get_data(audiobuf_handle));
 diff --git a/apps/playlist.c b/apps/playlist.c
 index 430a2ca117..8ffd8d63e5 100644
 --- a/apps/playlist.c
@@ -12178,10 +12342,27 @@ index 918669b245..2a828d63ec 100644
                  ignore_back_button_stub(false);
  
 diff --git a/apps/tagcache.c b/apps/tagcache.c
-index 4ad028869e..b8d10a8064 100644
+index 4ad028869e..23a2b7e416 100644
 --- a/apps/tagcache.c
 +++ b/apps/tagcache.c
-@@ -5250,14 +5250,10 @@ static void tagcache_thread(void)
+@@ -790,6 +790,16 @@ static void allocate_tempbuf(void)
+     if (tempbuf_handle > 0)
+     {
+         tempbuf = core_get_data(tempbuf_handle);
++        /* Asher OS: don't take every last byte. Music starting while the
++         * database is being saved needs some memory too; with none left
++         * the player crashed ("audio_reset_buffer(): OOM") */
++        size_t keep = 4 * 1024 * 1024;
++        if (size > 2 * keep)
++        {
++            size_t want = (size - keep) & ~(size_t)3;
++            if (core_shrink(tempbuf_handle, tempbuf, want))
++                size = want;
++        }
+         tempbuf_size = size;
+     }
+ #endif /* __PCTOOL__ */
+@@ -5250,14 +5260,10 @@ static void tagcache_thread(void)
       * the changes first in foreground. */
      if (db_file_exists(TAGCACHE_FILE_TEMP))
      {
