@@ -4,13 +4,24 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: iPod_Classic_6th_7th_gen
+            configure: --target=ipod6g --type=n
+          - name: iPod_Video_5th_gen
+            configure: --target=ipodvideo --ram=64 --type=n
+          - name: iPod_nano_3rd_gen
+            configure: --target=ipodnano3g --type=n
+    name: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
       - name: Install packages
         run: |
           sudo apt-get update
           sudo apt-get install -y libtool-bin xz-utils patch build-essential git wget curl bzip2 zip unzip texinfo bison flex automake autoconf libtool libncurses-dev libmpfr-dev libmpc-dev libgmp-dev zlib1g-dev libusb-dev libsdl1.2-dev python3 python3-pil python3-numpy
-      - name: Get Rockbox source and apply Asher OS patch
+      - name: Get Rockbox source and apply the Asher OS patch
         run: |
           mkdir rockbox && cd rockbox
           git init -q
@@ -33,17 +44,14 @@ jobs:
         run: |
           export PATH=$HOME/cross/bin:$PATH
           cd rockbox && mkdir build && cd build
-          ../tools/configure --target=ipod6g --type=n
+          ../tools/configure ${{ matrix.configure }}
           make -j$(nproc)
           make zip
-      - name: Make wallpapers and themes
-        run: python3 rockbox/tools/asher/make_assets.py assets
       - name: Package
         run: |
           mkdir out
-          cp rockbox/build/rockbox.zip out/rockbox.zip
-          (cd assets && zip -qr ../out/asher_assets.zip .rockbox)
+          cp rockbox/build/rockbox.zip out/AsherOS_firmware_${{ matrix.name }}.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: asher-os-install
+          name: asher-os-${{ matrix.name }}
           path: out/
