@@ -4767,7 +4767,7 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..5ba9626023
+index 0000000000..c57acbf1bf
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,577 @@
@@ -4794,7 +4794,7 @@ index 0000000000..5ba9626023
 +#include "button.h"
 +#include "asher_check.h"
 +
-+#define ASHER_OS_VERSION "2.5"
++#define ASHER_OS_VERSION "2.5.1"
 +#if defined(IPOD_VIDEO)
 +#define MODEL_LABEL "iPod Video (5th/5.5 gen)"
 +#elif defined(IPOD_NANO3G)
@@ -11619,7 +11619,7 @@ index 440164984b..5b11efd34a 100644
      {
          struct screen * screen = &(screens[i]);
 diff --git a/apps/gui/usb_screen.c b/apps/gui/usb_screen.c
-index b1a12d2d83..96f6dbefc6 100644
+index b1a12d2d83..d12626fbe7 100644
 --- a/apps/gui/usb_screen.c
 +++ b/apps/gui/usb_screen.c
 @@ -43,6 +43,98 @@
@@ -11816,25 +11816,48 @@ index b1a12d2d83..96f6dbefc6 100644
  static void handle_usb_events(struct viewport *title)
  {
  #if (CONFIG_STORAGE & STORAGE_MMC) && !defined(SIMULATOR)
-@@ -85,6 +265,17 @@ static void handle_usb_events(struct viewport *title)
+@@ -83,8 +263,40 @@ static void handle_usb_events(struct viewport *title)
+     int button;
+ 
      /* Don't return until we get SYS_USB_DISCONNECTED */
++#if defined(ASHER_USB) && !defined(SIMULATOR)
++    long gone_since = 0;
++#endif
      while(1)
      {
 +#ifdef ASHER_USB
-+        if (ej_on || EJ_EJECTED())
++        if (EJ_EJECTED())
 +        {
 +            ej_begin();          /* the computer is done: finishing up */
 +            ej_creep(450);       /* handing the drive back to the iPod */
 +        }
 +        else
 +        {
++            /* 2.5.1: connected (again): never the old eject screen */
++            ej_on = false;
 +            asher_usb_draw(false);
 +        }
++#if !defined(SIMULATOR)
++        /* 2.5.1: never wait here forever. If the drive is no longer with
++         * the computer (ejected, cable out) and the "disconnected" message
++         * didn't come within 3 seconds, carry on anyway */
++        {
++            bool usb_drive_with_computer(void);
++            if (!usb_drive_with_computer() || !usb_inserted())
++            {
++                if (!gone_since) gone_since = current_tick;
++                else if (TIME_AFTER(current_tick, gone_since + 3 * HZ))
++                    return;
++            }
++            else
++                gone_since = 0;
++        }
++#endif
 +#endif
  #ifndef USB_ENABLE_HID
          (void)title;
  #else
-@@ -99,8 +290,12 @@ static void handle_usb_events(struct viewport *title)
+@@ -99,8 +311,12 @@ static void handle_usb_events(struct viewport *title)
  #endif
          {
              /* hid emits the event in get_action */
@@ -11847,7 +11870,7 @@ index b1a12d2d83..96f6dbefc6 100644
          }
          if (button == SYS_USB_DISCONNECTED)
              return;
-@@ -140,7 +335,8 @@ static void usb_screen_fix_viewports(struct screen *screen,
+@@ -140,7 +356,8 @@ static void usb_screen_fix_viewports(struct screen *screen,
          logo_height = BMPHEIGHT_usblogo;
      }
  
@@ -11857,7 +11880,7 @@ index b1a12d2d83..96f6dbefc6 100644
  
      if (logo_width  > parent->width)
          logo_width  = parent->width;
-@@ -204,6 +400,12 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
+@@ -204,6 +421,12 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
          &bm_remote_usblogo,
  #endif
      };
@@ -11870,7 +11893,7 @@ index b1a12d2d83..96f6dbefc6 100644
      FOR_NB_SCREENS(i)
      {
          struct screen *screen = &screens[i];
-@@ -224,6 +426,21 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
+@@ -224,6 +447,21 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
  #endif
  }
  
@@ -11892,7 +11915,20 @@ index b1a12d2d83..96f6dbefc6 100644
  void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
  {
  #ifdef SIMULATOR /* the sim allows toggling USB fast enough to overflow viewportmanagers stack */
-@@ -275,7 +492,24 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+@@ -244,6 +482,12 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+ #endif
+ 
+     push_current_activity(ACTIVITY_USBSCREEN);
++#ifdef ASHER_USB
++    /* 2.5.1: a new connection starts clean: plugging back in while the
++     * last one was still finishing used to keep showing "OK to disconnect"
++     * while the drive was connected again */
++    ej_on = false;
++#endif
+ 
+ #ifdef USB_ENABLE_HID
+     usb_keypad_mode = global_settings.usb_keypad_mode;
+@@ -275,7 +519,24 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
          /* The font system leaves the .fnt fd's open, so we need for force close them all */
          font_disable_all();
      }
@@ -11917,7 +11953,7 @@ index b1a12d2d83..96f6dbefc6 100644
      usb_screens_draw(usb_screen_vps_ar);
      handle_usb_events(title);
  
-@@ -293,14 +527,56 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+@@ -293,14 +554,56 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
      touchscreen_set_mode(old_mode);
  #endif
  
@@ -13265,7 +13301,7 @@ index de48c890f9..6448e815bd 100644
  int usb_detect(void);
  #ifdef USB_STATUS_BY_EVENT
 diff --git a/firmware/powermgmt.c b/firmware/powermgmt.c
-index e89c0ce034..1aea47b0a7 100644
+index e89c0ce034..46886dcb6c 100644
 --- a/firmware/powermgmt.c
 +++ b/firmware/powermgmt.c
 @@ -21,6 +21,7 @@
@@ -13276,7 +13312,7 @@ index e89c0ce034..1aea47b0a7 100644
  #include "system.h"
  #include "kernel.h"
  #include "thread.h"
-@@ -383,6 +384,18 @@ static int voltage_to_battery_level(int millivolts)
+@@ -383,6 +384,25 @@ static int voltage_to_battery_level(int millivolts)
   * This will be called by the power thread after polling new battery data.
   * It must also be called if the battery type or capacity changes.
   */
@@ -13289,13 +13325,20 @@ index e89c0ce034..1aea47b0a7 100644
 +static int asher_raw_level = 100;   /* the reading itself, before smoothing */
 +void battery_hint_shown(int pct)
 +{
++#ifdef IPOD_NANO3G
++    /* 2.5.1: the nano has no hard drive, so nothing drags the voltage down
++     * at start-up: its own reading is right straight away (an old saved
++     * number only made it show the wrong % for minutes) */
++    (void)pct;
++    return;
++#endif
 +    if (pct >= 0 && pct <= 100) asher_batt_hint = pct;
 +}
 +
  static void battery_status_update(void)
  {
  #if ((CONFIG_BATTERY_MEASURE & PERCENTAGE_MEASURE) && (CONFIG_BATTERY_MEASURE & VOLTAGE_MEASURE))
-@@ -447,6 +460,106 @@ static void battery_status_update(void)
+@@ -447,6 +467,117 @@ static void battery_status_update(void)
          time_now = 0;
  #endif
  
@@ -13371,6 +13414,17 @@ index e89c0ce034..1aea47b0a7 100644
 +                            wait = 6 * 60 * HZ;         /* ~10% an hour */
 +                            shown++;
 +                        }
++                        else if (shown == 99 && voltage_now >= 4150)
++                        {
++                            /* 2.5.1: some iPods (the nano) never say the
++                             * charge is done: at full voltage, call it 100 */
++                            static int top_off;
++                            if (++top_off >= 15)        /* ~5 minutes there */
++                            {
++                                top_off = 0;
++                                shown = 100;
++                            }
++                        }
 +                    }
 +                    else if (shown < 100 && voltage_now >= 4100)
 +                    {
@@ -13402,7 +13456,7 @@ index e89c0ce034..1aea47b0a7 100644
      percent_now = level;
      send_battery_level_event(level);
  }
-@@ -746,7 +859,11 @@ static inline void power_thread_step(void)
+@@ -746,7 +877,11 @@ static inline void power_thread_step(void)
          average_step(false);
          battery_status_update();
      }
