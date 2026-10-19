@@ -1,8 +1,8 @@
 diff --git a/apps/SOURCES b/apps/SOURCES
-index bb612b38fb..48a050617a 100644
+index bb612b38fb..806b81eae2 100644
 --- a/apps/SOURCES
 +++ b/apps/SOURCES
-@@ -20,6 +20,22 @@ menu.c
+@@ -20,6 +20,23 @@ menu.c
  menus/menu_common.c
  menus/display_menu.c
  menus/theme_menu.c
@@ -13,6 +13,7 @@ index bb612b38fb..48a050617a 100644
 +asher/asher_stats.c
 +asher/asher_home.c
 +asher/asher_ui.c
++asher/asher_font3d.c
 +asher/asher_list.c
 +asher/asher_music.c
 +asher/asher_nowplaying.c
@@ -27,10 +28,10 @@ index bb612b38fb..48a050617a 100644
  menus/radio_menu.c
 diff --git a/apps/asher/asher_boot.c b/apps/asher/asher_boot.c
 new file mode 100644
-index 0000000000..de087967b7
+index 0000000000..fc5dce5a48
 --- /dev/null
 +++ b/apps/asher/asher_boot.c
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,166 @@
 +/* Asher OS boot gate: after power-on the Asher OS logo stays up until the
 + * click wheel has been turned one full rotation. A bar fills as you turn
 + * and keeps its progress if you stop. Finishing plays a little chime. */
@@ -106,15 +107,11 @@ index 0000000000..de087967b7
 +        lcd_fillrect(BAR_X + 3 + x, BAR_Y + 3, MIN(5, fill - x), BAR_H - 6);
 +    }
 +text:
-+    lcd_set_drawmode(DRMODE_FG);
-+    lcd_setfont(aui_font(AF_RETRO_S));
-+    lcd_set_foreground(LCD_RGBPACK(240, 230, 200));
 +    {
 +        const char *msg = steps >= STEPS ? "welcome" :
 +                          by_button ? "press the center button" : "turn the wheel to start";
-+        int w, h;
-+        lcd_getstringsize(msg, &w, &h);
-+        lcd_putsxy((AUI_W - w) / 2, by_button ? BAR_Y + 4 : BAR_Y + BAR_H + 4, msg);
++        aui_text(AF_RETRO_S, AUI_W / 2, by_button ? BAR_Y + 2 : BAR_Y + BAR_H,
++                 0xf0e6c8, msg, AUI_W - 20, 1);
 +    }
 +    lcd_set_drawmode(DRMODE_SOLID);
 +    lcd_update();
@@ -245,6 +242,340 @@ index 0000000000..7aed25e428
 +        MENU_EXITAFTERTHISMENU | MENU_FUNC_USEPARAM, func,                   \
 +        (void *)(intptr_t)(param), asher_chk_text, NULL,             \
 +        (void *)&name##_chk, NULL, Icon_NOICON)
++#endif
+diff --git a/apps/asher/asher_font3d.c b/apps/asher/asher_font3d.c
+new file mode 100644
+index 0000000000..0d38d7d4b0
+--- /dev/null
++++ b/apps/asher/asher_font3d.c
+@@ -0,0 +1,304 @@
++/* Asher OS 2.5: the 3D retro lettering and the pop-up messages.
++ *
++ * Letters (from Oswald, SIL Open Font License) come pre-drawn in
++ * /.rockbox/asher/ui/f3d_big.atf and f3d_small.atf as three 8-bit planes:
++ * a black outline, a teal 3D side and the face, which is drawn in the text
++ * colour. They're drawn straight onto the screen, like the other text.
++ *
++ * Pop-ups ("Added to Queue" and every other message) are a small box in the
++ * middle of the screen. On Asher OS screens they don't hold anything up:
++ * the box stays on top while you keep scrolling, and goes away by itself
++ * after a moment. On Rockbox's own lists (inside Settings) it shows for at
++ * most 3/4 of a second, since those can't draw it again themselves. */
++#include <stdio.h>
++#include <string.h>
++#include "config.h"
++#include "system.h"
++#include "kernel.h"
++#include "file.h"
++#include "lcd.h"
++#include "asher_ui.h"
++#include "asher_font3d.h"
++
++#define UI_DIR "/.rockbox/asher/ui/"
++
++struct atf {
++    int h, first, count, aw;
++    unsigned short ox[96];
++    unsigned char w[96], adv[96];
++    const unsigned char *pl[3];
++    bool ok;
++};
++static struct atf f3[3];
++static unsigned char f3_big[32 * 1300 * 3];
++static unsigned char f3_small[20 * 900 * 3];
++static unsigned char f3_tiny[16 * 760 * 3];
++
++static bool load_atf(struct atf *f, const char *name, unsigned char *buf, size_t cap)
++{
++    char path[64];
++    unsigned char hd[8];
++    snprintf(path, sizeof(path), UI_DIR "%s", name);
++    int fd = open(path, O_RDONLY);
++    if (fd < 0) return false;
++    bool ok = false;
++    if (read(fd, hd, 8) == 8 && !memcmp(hd, "ATF1", 4) && hd[6] <= 96)
++    {
++        f->h = hd[4]; f->first = hd[5]; f->count = hd[6];
++        unsigned char m[4];
++        ok = true;
++        for (int i = 0; i < f->count && ok; i++)
++        {
++            if (read(fd, m, 4) != 4) { ok = false; break; }
++            f->ox[i] = m[0] | m[1] << 8; f->w[i] = m[2]; f->adv[i] = m[3];
++        }
++        unsigned char aw[2];
++        if (ok && read(fd, aw, 2) == 2)
++        {
++            f->aw = aw[0] | aw[1] << 8;
++            size_t plane = (size_t)f->aw * f->h;
++            if (plane * 3 <= cap && read(fd, buf, plane * 3) == (ssize_t)(plane * 3))
++            {
++                for (int i = 0; i < 3; i++) f->pl[i] = buf + plane * i;
++            }
++            else ok = false;
++        }
++        else ok = false;
++    }
++    close(fd);
++    f->ok = ok;
++    return ok;
++}
++
++void f3d_init(void)
++{
++    if (!f3[0].ok) load_atf(&f3[0], "f3d_big.atf", f3_big, sizeof(f3_big));
++    if (!f3[1].ok) load_atf(&f3[1], "f3d_small.atf", f3_small, sizeof(f3_small));
++    if (!f3[2].ok) load_atf(&f3[2], "f3d_tiny.atf", f3_tiny, sizeof(f3_tiny));
++}
++
++bool f3d_ok(int which) { return which >= 0 && which < 3 && f3[which].ok; }
++int f3d_h(int which) { return f3d_ok(which) ? f3[which].h : 0; }
++
++static int glyph(const struct atf *f, unsigned char c)
++{
++    int i = (int)c - f->first;
++    if (i < 0 || i >= f->count) i = '?' - f->first;
++    return i;
++}
++
++int f3d_text_w(int which, const char *s)
++{
++    if (!f3d_ok(which) || !s) return 0;
++    const struct atf *f = &f3[which];
++    int w = 0, last_extra = 0;
++    for (; *s; s++)
++    {
++        unsigned char c = *s;
++        if ((c & 0xc0) == 0x80) continue;     /* UTF-8 continuation */
++        int g = glyph(f, c >= 0x80 ? '?' : c);
++        w += f->adv[g];
++        last_extra = f->w[g] - f->adv[g];
++    }
++    return w + (last_extra > 0 ? last_extra : 0);
++}
++
++static inline fb_data mix(fb_data d, unsigned r, unsigned g, unsigned b, unsigned a)
++{
++    /* a: 0..255 */
++    unsigned dr = RGB_UNPACK_RED(d), dg = RGB_UNPACK_GREEN(d), db = RGB_UNPACK_BLUE(d);
++    dr = (dr * (255 - a) + r * a) / 255;
++    dg = (dg * (255 - a) + g * a) / 255;
++    db = (db * (255 - a) + b * a) / 255;
++    return FB_RGBPACK(dr, dg, db);
++}
++
++void f3d_draw(int which, int x, int y, unsigned rgb, const char *s)
++{
++    if (!f3d_ok(which) || !s) return;
++    const struct atf *f = &f3[which];
++    unsigned fr = (rgb >> 16) & 255, fg = (rgb >> 8) & 255, fb = rgb & 255;
++    /* dark letters get a light outline, light ones a black one */
++    bool dark = fr * 3 + fg * 6 + fb < 1100;
++    const unsigned col[3][3] = {
++        { dark ? 255 : 0, dark ? 250 : 0, dark ? 240 : 0 },    /* outline */
++        { 26, 166, 160 },                               /* teal side */
++        { (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255 },   /* face */
++    };
++    for (; *s; s++)
++    {
++        unsigned char c = *s;
++        if ((c & 0xc0) == 0x80) continue;
++        int g = glyph(f, c >= 0x80 ? '?' : c);
++        int gw = f->w[g];
++        for (int p = 0; p < 3; p++)
++        {
++            const unsigned char *pl = f->pl[p] + f->ox[g];
++            for (int j = 0; j < f->h; j++)
++            {
++                int yy = y + j;
++                if (yy < 0 || yy >= LCD_HEIGHT) continue;
++                const unsigned char *a = pl + (size_t)j * f->aw;
++                fb_data *d = FBADDR(0, yy);
++                for (int i = 0; i < gw; i++)
++                {
++                    int xx = x + i;
++                    if (!a[i] || xx < 0 || xx >= LCD_WIDTH) continue;
++                    d[xx] = a[i] >= 250 ? FB_RGBPACK(col[p][0], col[p][1], col[p][2])
++                                        : mix(d[xx], col[p][0], col[p][1], col[p][2], a[i]);
++                }
++            }
++        }
++        x += f->adv[g];
++    }
++}
++
++/* ------------------------------------------------------------------ */
++/* pop-ups                                                             */
++/* ------------------------------------------------------------------ */
++#define TMAXL 4
++static char t_text[200];
++static char t_line[TMAXL][64];
++static int t_lines, t_x, t_y, t_w, t_h;
++static long t_until;
++static bool t_up;
++int aui_depth;                         /* > 0 while an Asher OS screen runs */
++
++static void t_layout(void)
++{
++    const int maxw = LCD_WIDTH - 60;
++    t_lines = 0;
++    const char *p = t_text;
++    while (*p && t_lines < TMAXL)
++    {
++        /* one source line (up to \n), word-wrapped */
++        char src[200];
++        size_t n = strcspn(p, "\n");
++        if (n >= sizeof(src)) n = sizeof(src) - 1;
++        memcpy(src, p, n); src[n] = 0;
++        p += n; if (*p == '\n') p++;
++        char *w = src;
++        while (*w == ' ') w++;
++        if (!*w) continue;
++        char cur[64] = "";
++        while (*w && t_lines < TMAXL)
++        {
++            char word[64];
++            size_t wl = strcspn(w, " ");
++            if (wl >= sizeof(word)) wl = sizeof(word) - 1;
++            memcpy(word, w, wl); word[wl] = 0;
++            w += wl; while (*w == ' ') w++;
++            char test[130];
++            snprintf(test, sizeof(test), cur[0] ? "%s %s" : "%s%s", cur, word);
++            if (cur[0] && f3d_text_w(F3D_BIG, test) > maxw)
++            {
++                strlcpy(t_line[t_lines++], cur, sizeof(t_line[0]));
++                strlcpy(cur, word, sizeof(cur));
++            }
++            else
++                strlcpy(cur, test, sizeof(cur));
++        }
++        if (cur[0] && t_lines < TMAXL) strlcpy(t_line[t_lines++], cur, sizeof(t_line[0]));
++    }
++    int lh = f3d_h(F3D_BIG) - 4, wmax = 0;
++    for (int i = 0; i < t_lines; i++)
++    {
++        int lw = f3d_text_w(F3D_BIG, t_line[i]);
++        if (lw > wmax) wmax = lw;
++    }
++    t_w = MIN(LCD_WIDTH - 24, wmax + 28);
++    t_h = t_lines * lh + 18;
++    t_x = (LCD_WIDTH - t_w) / 2;
++    t_y = (LCD_HEIGHT - t_h) / 2;
++}
++
++static void t_draw(void)
++{
++    struct viewport *old = lcd_set_viewport(NULL);
++    unsigned old_fg = lcd_get_foreground();
++    int x = t_x, y = t_y, w = t_w, h = t_h, r = 9;
++    /* rounded box: dark plum with a cream edge */
++    lcd_set_drawmode(DRMODE_SOLID);
++    for (int j = 0; j < h; j++)
++    {
++        int inset = 0;
++        if (j < r || j >= h - r)
++        {
++            int dy = j < r ? r - j : j - (h - r - 1);
++            int dx = 0;
++            while (dx * dx + dy * dy <= r * r) dx++;
++            inset = r - dx + 1;
++            if (inset < 0) inset = 0;
++        }
++        bool edge = j == 0 || j == h - 1 || j == 1 || j == h - 2;
++        lcd_set_foreground(edge ? LCD_RGBPACK(243, 238, 220) : LCD_RGBPACK(34, 26, 54));
++        lcd_hline(x + inset, x + w - 1 - inset, y + j);
++        if (!edge)
++        {
++            lcd_set_foreground(LCD_RGBPACK(243, 238, 220));
++            lcd_hline(x + inset, x + inset + 1, y + j);
++            lcd_hline(x + w - 2 - inset, x + w - 1 - inset, y + j);
++        }
++    }
++    int lh = f3d_h(F3D_BIG) - 4;
++    int ty = y + 9 - 2;
++    for (int i = 0; i < t_lines; i++, ty += lh)
++    {
++        int lw = f3d_text_w(F3D_BIG, t_line[i]);
++        f3d_draw(F3D_BIG, x + (w - lw) / 2, ty, 0xf3eedc, t_line[i]);
++    }
++    lcd_set_foreground(old_fg);
++    lcd_set_viewport(old);
++}
++
++bool asher_toast(const char *text, int ticks, bool rockbox_screen)
++{
++    if (!f3d_ok(F3D_BIG) || !text || !text[0]) return false;
++    strlcpy(t_text, text, sizeof(t_text));
++    t_layout();
++    if (t_lines == 0) return true;
++    /* short: about a second, a little longer for long messages */
++    int len = strlen(t_text);
++    long dur = HZ * 7 / 10 + (long)len * HZ / 40;
++    if (dur > HZ * 5 / 2) dur = HZ * 5 / 2;
++    if (ticks > 0 && ticks < dur) dur = MAX(ticks, HZ * 7 / 10);
++    t_until = current_tick + dur;
++    t_draw();
++    lcd_update_rect(t_x, t_y, t_w, t_h);
++    if (!rockbox_screen && aui_depth > 0)
++    {
++        t_up = true;              /* stays on top of the screen's redraws */
++        return true;
++    }
++    /* a Rockbox screen: show it for a moment */
++    t_up = false;
++    if (ticks > 0) sleep(MIN(dur, HZ * 3 / 4));
++    return true;
++}
++
++/* called by aui_update(): keep the pop-up on top while it lasts */
++void asher_toast_overlay(void)
++{
++    if (!t_up) return;
++    if (TIME_BEFORE(current_tick, t_until)) t_draw();
++    else t_up = false;
++}
++
++/* true once, when a pop-up has run out and the screen should redraw */
++bool asher_toast_expired(void)
++{
++    static bool was_up;
++    if (t_up && !TIME_BEFORE(current_tick, t_until)) t_up = false;
++    bool r = was_up && !t_up;
++    was_up = t_up;
++    return r;
++}
++
++/* how long a screen may wait for a button before the pop-up needs clearing */
++int asher_toast_tmo(int tmo)
++{
++    if (!t_up) return tmo;
++    long left = t_until - current_tick + 1;
++    if (left < 1) left = 1;
++    return left < tmo ? (int)left : tmo;
++}
+diff --git a/apps/asher/asher_font3d.h b/apps/asher/asher_font3d.h
+new file mode 100644
+index 0000000000..1943e1ba4d
+--- /dev/null
++++ b/apps/asher/asher_font3d.h
+@@ -0,0 +1,18 @@
++#ifndef ASHER_FONT3D_H
++#define ASHER_FONT3D_H
++#include <stdbool.h>
++/* the 3D retro lettering (see asher_font3d.c) */
++enum { F3D_BIG, F3D_SMALL, F3D_TINY };
++void f3d_init(void);
++bool f3d_ok(int which);
++int  f3d_h(int which);
++int  f3d_text_w(int which, const char *s);
++void f3d_draw(int which, int x, int y, unsigned rgb, const char *s);
++
++/* pop-up messages: true if shown (false: use the old splash) */
++bool asher_toast(const char *text, int ticks, bool rockbox_screen);
++void asher_toast_overlay(void);
++bool asher_toast_expired(void);
++int  asher_toast_tmo(int tmo);
++extern int aui_depth;
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
 new file mode 100644
@@ -573,10 +904,10 @@ index 0000000000..0f36b5cbaa
 +#endif
 diff --git a/apps/asher/asher_list.c b/apps/asher/asher_list.c
 new file mode 100644
-index 0000000000..1dd3a0843b
+index 0000000000..84a295e450
 --- /dev/null
 +++ b/apps/asher/asher_list.c
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,304 @@
 +/* Asher OS list screen: thick rounded selection bar, top bar with the
 + * clock, and accelerated scrolling with a first-letter bubble. */
 +#include <stdio.h>
@@ -590,6 +921,7 @@ index 0000000000..1dd3a0843b
 +#include "timefuncs.h"
 +#include "lcd.h"
 +#include "asher_ui.h"
++#include "asher_font3d.h"
 +#include "asher_list.h"
 +#include "asher_quick.h"
 +#include "asher_media.h"
@@ -798,7 +1130,8 @@ index 0000000000..1dd3a0843b
 +            redraw = false;
 +        }
 +        /* every list here is part of Music, so the music keys always work */
-+        int action = list_action(true, media.seeking ? HZ / 10 : (show_letter ? HZ / 5 : HZ));
++        int action = list_action(true, asher_toast_tmo(media.seeking ? HZ / 10
++                                                       : (show_letter ? HZ / 5 : HZ)));
 +        if (asher_media(&media, action))
 +        {
 +            if (media.seeking || l->style) redraw = true;   /* the dot may move */
@@ -924,10 +1257,10 @@ index 0000000000..3156836e43
 +#endif
 diff --git a/apps/asher/asher_media.c b/apps/asher/asher_media.c
 new file mode 100644
-index 0000000000..4b22d9f8e5
+index 0000000000..e1068145d5
 --- /dev/null
 +++ b/apps/asher/asher_media.c
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,114 @@
 +/* Asher OS music controls shared by several screens. */
 +#include "config.h"
 +#include "system.h"
@@ -949,8 +1282,7 @@ index 0000000000..4b22d9f8e5
 +    if (!st && asher_queue_unstarted)
 +    {
 +        /* songs were added to the queue while nothing was loaded */
-+        asher_queue_unstarted = false;
-+        playlist_start(0, 0, 0);
++        asher_queue_start();
 +        return;
 +    }
 +    if (!st)
@@ -1181,10 +1513,10 @@ index 0000000000..303fd28d90
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000000..777413932e
+index 0000000000..dc53301d65
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,2005 @@
+@@ -0,0 +1,2047 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -1450,10 +1782,12 @@ index 0000000000..777413932e
 +#define QKEEP 60
 +static char qk_path[QKEEP][MAX_PATH];
 +static int qk_n;
++static bool qk_front;      /* put them first, before the new list's first song */
 +static void queue_keep(void)
 +{
 +    struct playlist_info *pl = playlist_get_current();
 +    struct playlist_track_info info;
++    if (qk_front) return;              /* already set aside (queue_start) */
 +    qk_n = 0;
 +    if (!pl->started || pl->amount <= 0 || pl->index < 0) return;
 +    for (int ahead = 1; pl->index + ahead < pl->amount && qk_n < QKEEP; ahead++)
@@ -1467,6 +1801,14 @@ index 0000000000..777413932e
 +        playlist_insert_track(NULL, qk_path[k], PLAYLIST_INSERT, true, k == qk_n - 1);
 +    qk_n = 0;
 +}
++/* a queued song that will play first anyway (left out of the shuffle) */
++static bool queued_first(const char *path)
++{
++    if (!qk_front) return false;
++    for (int k = 0; k < qk_n; k++)
++        if (!strcmp(qk_path[k], path)) return true;
++    return false;
++}
 +/* a new playlist, keeping what's queued */
 +static int new_playlist(void)
 +{
@@ -1475,6 +1817,28 @@ index 0000000000..777413932e
 +}
 +/* songs added while nothing was loaded: the list waits for Play */
 +bool asher_queue_unstarted;
++static int shuffle_all(void);
++/* Play on that waiting queue: play the queued songs, then keep going with
++ * a shuffle of every song (it used to stop after the last one) */
++void asher_queue_start(void)
++{
++    struct playlist_track_info info;
++    int n = playlist_amount();
++    asher_queue_unstarted = false;
++    qk_n = 0;
++    for (int i = 0; i < n && qk_n < QKEEP; i++)
++        if (playlist_get_track_info(NULL, i, &info) >= 0)
++            strlcpy(qk_path[qk_n++], info.filename, MAX_PATH);
++    if (qk_n == 0) return;
++    qk_front = true;
++    if (shuffle_all() <= 0 && qk_front)
++    {
++        /* couldn't make the shuffle: just play what was queued */
++        qk_front = false;
++        qk_n = 0;
++        playlist_start(0, 0, 0);
++    }
++}
 +
 +/* start the current playlist at 'start'; honours the Shuffle setting.
 + * force_shuffle: shuffle everything (the Shuffle item) */
@@ -1496,6 +1860,16 @@ index 0000000000..777413932e
 +        start = force_shuffle ? 0 : r;
 +    }
 +    asher_queue_unstarted = false;
++    if (qk_front)
++    {
++        /* the queue comes first, then the (shuffled) list carries on */
++        qk_front = false;
++        for (int k = 0; k < qk_n; k++)
++            playlist_insert_track(NULL, qk_path[k], k, true, k == qk_n - 1);
++        qk_n = 0;
++        playlist_start(0, 0, 0);
++        return playback_started();
++    }
 +    playlist_start(start, 0, 0);
 +    queue_restore();
 +    return playback_started();
@@ -1814,7 +2188,7 @@ index 0000000000..777413932e
 +              : (count > cap ? (first + j) % count : j);
 +        if (k >= count) break;
 +        if (tagcache_retrieve(&tcs, L[order[k]].idx, tag_filename, path, sizeof(path))
-+            && path[0] && (!check || file_exists(path)))
++            && path[0] && (!check || file_exists(path)) && !queued_first(path))
 +        {
 +            if (playlist_insert_context_add(&ctx, path) < 0)
 +                break;                      /* queue full: play what fits */
@@ -1885,8 +2259,8 @@ index 0000000000..777413932e
 +        {
 +            asher_queue_unstarted = true;
 +            int n = playlist_amount();
-+            if (n <= 1) splash(HZ * 3 / 2, "Added to Queue - press Play to start");
-+            else splashf(HZ * 3 / 2, "Added to Queue (%d songs) - press Play to start", n);
++            if (n <= 1) splash(HZ * 3 / 2, "Queued - press Play");
++            else splashf(HZ * 3 / 2, "Queued (%d) - press Play", n);
 +        }
 +        else
 +            splash(HZ * 3 / 2, "Couldn't add that song");
@@ -1901,15 +2275,15 @@ index 0000000000..777413932e
 +    }
 +    int n = playlist_queued_ahead();
 +    if (n <= 1) splash(HZ, "Added to Queue");
-+    else splashf(HZ, "Added to Queue (%d songs)", n);
++    else splashf(HZ, "Added to Queue (%d)", n);
 +}
 +
 +static void queue_cancel(void)
 +{
 +    loading_screen("LOADING", NULL);
 +    int k = playlist_cancel_queue();
-+    if (k == 1) splash(HZ, "Queue cancelled (1 song)");
-+    else splashf(HZ, "Queue cancelled (%d songs)", k);
++    if (k == 1) splash(HZ, "Queue cleared");
++    else splashf(HZ, "Queue cleared (%d)", k);
 +}
 +
 +/* the menu itself; name is shown under the title */
@@ -3192,10 +3566,10 @@ index 0000000000..777413932e
 +                  library_rebuild, NULL, Icon_NOICON);
 diff --git a/apps/asher/asher_music.h b/apps/asher/asher_music.h
 new file mode 100644
-index 0000000000..8108e9199c
+index 0000000000..781a121ca4
 --- /dev/null
 +++ b/apps/asher/asher_music.h
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,17 @@
 +#ifndef ASHER_MUSIC_H
 +#define ASHER_MUSIC_H
 +#include <stdbool.h>
@@ -3205,6 +3579,7 @@ index 0000000000..8108e9199c
 +int asher_queue_screen(void);                  /* Music > Queue */
 +bool asher_up_next(char *buf, size_t n, bool *queued);   /* the next song */
 +extern bool asher_queue_unstarted;             /* queued while nothing loaded */
++void asher_queue_start(void);                  /* Play on that waiting queue */
 +void asher_resume_paused(void);                /* load the last song, paused */
 +void asher_shuffle_set(bool on);               /* shuffle on/off (also what's playing) */
 +void asher_shuffle_playlists(void);            /* mix every playlist together */
@@ -4054,10 +4429,10 @@ index 0000000000..8ff3b022d0
 +#endif
 diff --git a/apps/asher/asher_quick.c b/apps/asher/asher_quick.c
 new file mode 100644
-index 0000000000..80cbc1a73a
+index 0000000000..ef43eb29a0
 --- /dev/null
 +++ b/apps/asher/asher_quick.c
-@@ -0,0 +1,318 @@
+@@ -0,0 +1,319 @@
 +/* Asher OS "hold Menu" extras.
 + *  - asher_music_mode(): on screens that can't control music (Settings...),
 + *    a music control panel until Menu is held (or pressed) again.
@@ -4079,6 +4454,7 @@ index 0000000000..80cbc1a73a
 +#include "lcd.h"
 +#include "gui/viewport.h"
 +#include "asher_ui.h"
++#include "asher_font3d.h"
 +#include "asher_media.h"
 +#include "asher_music.h"
 +#include "asher_prefs.h"
@@ -4349,7 +4725,7 @@ index 0000000000..80cbc1a73a
 +    {
 +        if (aui_woke()) redraw = true;
 +        if (redraw) { pop_draw(title, line, items, n, row); redraw = false; }
-+        int a = get_action(CONTEXT_STD, HZ);
++        int a = get_action(CONTEXT_STD, asher_toast_tmo(HZ));
 +        switch (a)
 +        {
 +            case ACTION_STD_NEXT: case ACTION_STD_NEXTREPEAT:
@@ -4391,7 +4767,7 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..e3818588b8
+index 0000000000..5ba9626023
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,577 @@
@@ -4418,7 +4794,7 @@ index 0000000000..e3818588b8
 +#include "button.h"
 +#include "asher_check.h"
 +
-+#define ASHER_OS_VERSION "2.4.9"
++#define ASHER_OS_VERSION "2.5"
 +#if defined(IPOD_VIDEO)
 +#define MODEL_LABEL "iPod Video (5th/5.5 gen)"
 +#elif defined(IPOD_NANO3G)
@@ -4992,7 +5368,7 @@ index 0000000000..5349121a88
 +#endif
 diff --git a/apps/asher/asher_stats.c b/apps/asher/asher_stats.c
 new file mode 100644
-index 0000000000..7dd1b2ecfa
+index 0000000000..5b644b3fad
 --- /dev/null
 +++ b/apps/asher/asher_stats.c
 @@ -0,0 +1,354 @@
@@ -5241,19 +5617,19 @@ index 0000000000..7dd1b2ecfa
 +    aui_present();
 +
 +    if (wp)
-+        aui_text(AF_RETRO_S, WALL_X + 5, WALL_Y + ASHER_BOX_H - 12, 0xfff2c8,
++        aui_text(AF_RETRO_T, WALL_X + 5, WALL_Y + ASHER_BOX_H - 12, 0xfff2c8,
 +                 wname ? wname : "", ASHER_BOX_W - 10, 0);
 +    else
-+        aui_text(AF_RETRO_S, WALL_X + ASHER_BOX_W / 2, WALL_Y + 55, C_SUB, "no wallpaper", 150, 1);
++        aui_text(AF_RETRO_T, WALL_X + ASHER_BOX_W / 2, WALL_Y + 55, C_SUB, "no wallpaper", 150, 1);
 +
 +    if (playing)
 +    {
-+        aui_text(AF_RETRO_S, INFO_X + 5, INFO_Y + 17, paused ? C_PAUSE : C_PLAY,
++        aui_text(AF_RETRO_T, INFO_X + 5, INFO_Y + 17, paused ? C_PAUSE : C_PLAY,
 +                 paused ? "> currently paused" : "> currently playing", 130, 0);
 +        if (id3->bitrate)
 +        {
 +            snprintf(buf, sizeof(buf), "%d kbps", id3->bitrate);
-+            aui_text(AF_RETRO_S, INFO_X + 194, INFO_Y + 17, C_SUB, buf, 60, 2);
++            aui_text(AF_RETRO_T, INFO_X + 194, INFO_Y + 17, C_SUB, buf, 60, 2);
 +        }
 +        snprintf(buf, sizeof(buf), "%s - %s", track_title(id3),
 +                 (id3->artist && id3->artist[0]) ? id3->artist : "Unknown Artist");
@@ -5267,31 +5643,31 @@ index 0000000000..7dd1b2ecfa
 +            strlcat(buf, "/", sizeof(buf));
 +            strlcat(buf, b2, sizeof(buf));
 +        }
-+        aui_text(AF_RETRO_S, INFO_X + 194, INFO_Y + 41, C_SUB, buf, 62, 2);
++        aui_text(AF_RETRO_T, INFO_X + 194, INFO_Y + 41, C_SUB, buf, 62, 2);
 +    }
 +    else
 +    {
-+        aui_text(AF_RETRO_S, INFO_X + 5, INFO_Y + 17, C_SUB, "> nothing playing", 180, 0);
++        aui_text(AF_RETRO_T, INFO_X + 5, INFO_Y + 17, C_SUB, "> nothing playing", 180, 0);
 +        aui_text(AF_SMALL, INFO_X + 5, INFO_Y + 30, C_TEXT, "Pick something in Music", 188, 0);
 +    }
 +    /* shuffle state in the now_playing.txt title bar (centre button flips it) */
-+    aui_text(AF_RETRO_S, INFO_X + 166, INFO_Y + 2,
++    aui_text(AF_RETRO_T, INFO_X + 166, INFO_Y + 2,
 +             global_settings.playlist_shuffle ? C_PLAY : C_SUB,
 +             global_settings.playlist_shuffle ? "shuffle:on" : "shuffle:off", 76, 2);
 +    /* moon phase, then the free space under it (the date is in the top bar) */
 +    {
 +        char f1[16], t1[16];
 +        bool st = storage_str(f1, sizeof(f1), t1, sizeof(t1));
-+        int ly = st ? MOON_Y + 14 : MOON_Y + 22;
-+        aui_text(AF_RETRO_S, MOON_X + 43, ly, C_TEXT, moon_l1[ph], 57, 0);
-+        aui_text(AF_RETRO_S, MOON_X + 43, ly + 9, C_TEXT, moon_l2[ph], 57, 0);
++        int ly = st ? MOON_Y + 11 : MOON_Y + 20;
++        aui_text(AF_RETRO_T, MOON_X + 43, ly, C_TEXT, moon_l1[ph], 57, 0);
++        aui_text(AF_RETRO_T, MOON_X + 43, ly + 10, C_TEXT, moon_l2[ph], 57, 0);
 +        if (st)
 +        {
 +            snprintf(buf, sizeof(buf), "%s GB", f1);
-+            aui_text(AF_RETRO_S, MOON_X + 43, ly + 19, C_PLAY, buf, 57, 0);
++            aui_text(AF_RETRO_T, MOON_X + 43, ly + 21, C_PLAY, buf, 57, 0);
 +            snprintf(buf, sizeof(buf), "free of %s", t1);
-+            if (aui_text_w(AF_RETRO_S, buf) > 57) strcpy(buf, "free");
-+            aui_text(AF_RETRO_S, MOON_X + 43, ly + 28, C_SUB, buf, 57, 0);
++            if (aui_text_w(AF_RETRO_T, buf) > 57) strcpy(buf, "free");
++            aui_text(AF_RETRO_T, MOON_X + 43, ly + 31, C_SUB, buf, 57, 0);
 +        }
 +    }
 +    aui_topbar_text("Stats");
@@ -5780,10 +6156,10 @@ index 0000000000..728fa524c6
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..e15d4f5882
+index 0000000000..5e07ccd6cc
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,850 @@
+@@ -0,0 +1,894 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -5809,6 +6185,7 @@ index 0000000000..e15d4f5882
 +#include "asher_mem.h"
 +#include "action.h"
 +#include "asher_ui.h"
++#include "asher_font3d.h"
 +#include "asher_boot.h"
 +#include "asher_theme.h"
 +#include "asher_wallpaper.h"
@@ -6099,6 +6476,7 @@ index 0000000000..e15d4f5882
 +    char path[MAX_PATH];
 +    if (inited) return;
 +    inited = true;
++    f3d_init();                       /* the 3D retro lettering */
 +    for (int i = 0; i < AF_COUNT; i++)
 +    {
 +        snprintf(path, sizeof(path), FONT_DIR "%s.fnt", font_file[i]);
@@ -6139,13 +6517,29 @@ index 0000000000..e15d4f5882
 +
 +int aui_font(int which)
 +{
++    if (which == AF_RETRO_T) which = AF_RETRO_S;
 +    if (which < 0 || which >= AF_COUNT || fonts[which] < 0) return FONT_UI;
 +    return fonts[which];
 +}
-+int aui_font_h(int which) { return font_get(aui_font(which))->height; }
++/* the old pixel font (AF_RETRO, AF_RETRO_S) is drawn with the 3D lettering */
++static int f3_of(int which)
++{
++    if (which == AF_RETRO && f3d_ok(F3D_BIG)) return F3D_BIG;
++    if (which == AF_RETRO_S && f3d_ok(F3D_SMALL)) return F3D_SMALL;
++    if (which == AF_RETRO_T && f3d_ok(F3D_TINY)) return F3D_TINY;
++    return -1;
++}
++int aui_font_h(int which)
++{
++    int f = f3_of(which);
++    if (f >= 0) return f3d_h(f);
++    return font_get(aui_font(which))->height;
++}
 +int aui_text_w(int which, const char *s)
 +{
 +    int w = 0, h = 0;
++    int f = f3_of(which);
++    if (f >= 0) return f3d_text_w(f, s);
 +    font_getstringsize((const unsigned char *)s, &w, &h, aui_font(which));
 +    return w;
 +}
@@ -6536,6 +6930,7 @@ index 0000000000..e15d4f5882
 +/* ------------------------------------------------------------------ */
 +void aui_begin(void)
 +{
++    aui_depth++;
 +    aui_init();
 +    viewportmanager_theme_enable(SCREEN_MAIN, false, NULL);
 +    lcd_set_viewport(NULL);
@@ -6544,6 +6939,7 @@ index 0000000000..e15d4f5882
 +
 +void aui_end(void)
 +{
++    if (aui_depth > 0) aui_depth--;
 +    lcd_set_viewport(NULL);
 +    lcd_set_drawmode(DRMODE_SOLID);
 +    lcd_setfont(FONT_UI);
@@ -6566,6 +6962,29 @@ index 0000000000..e15d4f5882
 +    int w = 0, h = 0, fid = aui_font(font);
 +    if (!s || !s[0]) return;
 +    strlcpy(buf, s, sizeof(buf));
++    int f3 = f3_of(font);
++    if (f3 >= 0)
++    {
++        w = f3d_text_w(f3, buf);
++        if (maxw > 0 && w > maxw)
++        {
++            size_t len = strlen(buf);
++            while (len > 0)
++            {
++                do { len--; } while (len > 0 && (buf[len] & 0xc0) == 0x80);
++                buf[len] = '\0';
++                char tmp[164];
++                snprintf(tmp, sizeof(tmp), "%s...", buf);
++                w = f3d_text_w(f3, tmp);
++                if (w <= maxw) { strlcpy(buf, tmp, sizeof(buf)); break; }
++            }
++        }
++        if (align == 1) x -= w / 2;
++        else if (align == 2) x -= w;
++        lcd_set_viewport(NULL);
++        f3d_draw(f3, x, y, rgb, buf);
++        return;
++    }
 +    font_getstringsize((unsigned char *)buf, &w, &h, fid);
 +    if (maxw > 0 && w > maxw)
 +    {
@@ -6589,7 +7008,7 @@ index 0000000000..e15d4f5882
 +    lcd_set_drawmode(DRMODE_SOLID);
 +}
 +
-+void aui_update(void) { lcd_update(); asher_batt_save_if_due(); }
++void aui_update(void) { asher_toast_overlay(); lcd_update(); asher_batt_save_if_due(); }
 +void aui_update_rect(int x, int y, int w, int h) { lcd_update_rect(x, y, w, h); }
 +
 +/* ------------------------------------------------------------------ */
@@ -6632,14 +7051,15 @@ index 0000000000..e15d4f5882
 +    bool on = is_backlight_on(true), woke = on && !last_on;
 +    last_on = on;
 +    if (aui_dirty) { aui_dirty = false; woke = true; }
++    if (asher_toast_expired()) woke = true;     /* a pop-up ran out: redraw */
 +    return woke;
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..cb2a44ec63
+index 0000000000..4de45a3f61
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,110 @@
 +/* Asher OS shared drawing layer.
 + * Screens are composed into an off-screen buffer (aui_fb): wallpaper,
 + * glass panels and alpha-blended sprites. The buffer is then copied to the
@@ -6688,6 +7108,7 @@ index 0000000000..cb2a44ec63
 +
 +/* fonts */
 +enum { AF_BIG, AF_MED, AF_SMALL, AF_SMALLR, AF_RETRO, AF_RETRO_S, AF_COUNT };
++#define AF_RETRO_T (AF_COUNT + 1)   /* compact 3D lettering (Stats widgets) */
 +
 +/* loading animations */
 +enum { LDR_MUSIC, LDR_STATS, LDR_NP, LDR_MODERN, LDR_COUNT };
@@ -6746,7 +7167,7 @@ index 0000000000..cb2a44ec63
 +bool aui_woke(void);                    /* screen just turned back on? */
 +extern bool aui_dirty;                  /* set to make the screen redraw */
 +extern long aui_quiet_until;
-+#define ASHER_ASSETS_VERSION "2.4"
++#define ASHER_ASSETS_VERSION "2.5"
 +extern bool aui_assets_old;      /* the .rockbox picture files are older than the firmware */            /* skip loading screens until this tick */
 +#endif
 diff --git a/apps/asher/asher_wallpaper.c b/apps/asher/asher_wallpaper.c
@@ -11089,20 +11510,21 @@ index e382fb65c0..ce3d6bd2fe 100644
  
      bool first_run = skin_backdrop_init();
 diff --git a/apps/gui/splash.c b/apps/gui/splash.c
-index 440164984b..968449adf0 100644
+index 440164984b..5b11efd34a 100644
 --- a/apps/gui/splash.c
 +++ b/apps/gui/splash.c
-@@ -33,6 +33,9 @@
+@@ -33,6 +33,10 @@
  #include "scrollbar.h"
  #include "font.h"
  #ifndef BOOTLOADER
 +#include "asher/asher_ui.h"
++#include "asher/asher_font3d.h"
 +#endif
 +#ifndef BOOTLOADER
  #include "misc.h" /* get_current_activity */
  #endif
  
-@@ -51,7 +54,7 @@ static long progress_next_tick, talked_tick;
+@@ -51,7 +55,7 @@ static long progress_next_tick, talked_tick;
      #define MAXBUFFER (512)
  #endif
  
@@ -11111,7 +11533,7 @@ index 440164984b..968449adf0 100644
  #define SPLASH_MEMORY_INTERVAL (HZ)
  
  /* splash_internal does the actual drawing of the splash box and text
-@@ -125,6 +128,13 @@ static bool splash_internal(struct screen * screen, const char *fmt, va_list ap,
+@@ -125,6 +129,13 @@ static bool splash_internal(struct screen * screen, const char *fmt, va_list ap,
      /* prevent screen artifacts by keeping the max width / height seen */
      int maxw = max_width[screen->screen_type];
      int maxh = max_height[screen->screen_type];
@@ -11125,7 +11547,7 @@ index 440164984b..968449adf0 100644
      int fontnum = vp->font;
  
      size_t next_len;
-@@ -328,6 +338,33 @@ static bool splash_internal(struct screen * screen, const char *fmt, va_list ap,
+@@ -328,6 +339,33 @@ static bool splash_internal(struct screen * screen, const char *fmt, va_list ap,
  #endif
          vp->drawmode = (DRMODE_SOLID|DRMODE_INVERSEVID);
  
@@ -11159,7 +11581,7 @@ index 440164984b..968449adf0 100644
      screen->fill_viewport();
  
  #if LCD_DEPTH > 1
-@@ -341,6 +378,7 @@ static bool splash_internal(struct screen * screen, const char *fmt, va_list ap,
+@@ -341,6 +379,7 @@ static bool splash_internal(struct screen * screen, const char *fmt, va_list ap,
          vp->drawmode = DRMODE_SOLID;
  
      screen->draw_border_viewport();
@@ -11167,7 +11589,7 @@ index 440164984b..968449adf0 100644
  
      /* center y within the available splash box */
      if (y < maxh)
-@@ -367,6 +405,9 @@ void splashf(int ticks, const char *fmt, ...)
+@@ -367,6 +406,9 @@ void splashf(int ticks, const char *fmt, ...)
  
      /* fmt may be a so called virtual pointer. See settings.h. */
      long id;
@@ -11177,6 +11599,25 @@ index 440164984b..968449adf0 100644
      if((id = P2ID((const unsigned char*)fmt)) >= 0)
          /* If fmt specifies a voicefont ID, and voice menus are
             enabled, then speak it. */
+@@ -375,6 +417,18 @@ void splashf(int ticks, const char *fmt, ...)
+     /* If fmt is a lang ID then get the corresponding string (which
+        still might contain % place holders). */
+     fmt = P2STR((unsigned char *)fmt);
++#if !defined(BOOTLOADER) && defined(HAVE_LCD_COLOR)
++    {
++        /* Asher OS 2.5: a small pop-up box in the 3D lettering that goes
++         * away by itself (and doesn't hold up Asher OS screens) */
++        static char tbuf[200];
++        va_start(ap, fmt);
++        vsnprintf(tbuf, sizeof(tbuf), fmt, ap);
++        va_end(ap);
++        if (asher_toast(tbuf, ticks, get_current_activity() == ACTIVITY_SETTINGS))
++            return;
++    }
++#endif
+     FOR_NB_SCREENS(i)
+     {
+         struct screen * screen = &(screens[i]);
 diff --git a/apps/gui/usb_screen.c b/apps/gui/usb_screen.c
 index b1a12d2d83..96f6dbefc6 100644
 --- a/apps/gui/usb_screen.c
@@ -11584,6 +12025,20 @@ index d29f4d1612..16504e8791 100644
              int fd = open_utf8(ROCKBOX_DIR "/playername.txt", O_RDONLY);
              if (fd >= 0) {
                  read_line(fd, ipod_name, sizeof(ipod_name));
+diff --git a/apps/keymaps/keymap-ipod.c b/apps/keymaps/keymap-ipod.c
+index 787d930468..d523b55cba 100644
+--- a/apps/keymaps/keymap-ipod.c
++++ b/apps/keymaps/keymap-ipod.c
+@@ -50,7 +50,8 @@ static const struct button_mapping button_context_standard[]  = {
+     { ACTION_STD_MENU,          BUTTON_MENU|BUTTON_REL,             BUTTON_MENU },
+     { ACTION_STD_QUICKSCREEN,   BUTTON_MENU|BUTTON_REPEAT,          BUTTON_MENU },
+     { ACTION_STD_CONTEXT,       BUTTON_SELECT|BUTTON_REPEAT,        BUTTON_SELECT },
+-    { ACTION_STD_CANCEL,        BUTTON_PLAY|BUTTON_REPEAT,          BUTTON_NONE },
++    /* Asher OS: holding Play no longer backs out of lists (Settings) */
++    { ACTION_NONE,              BUTTON_PLAY|BUTTON_REPEAT,          BUTTON_NONE },
+ 
+     LAST_ITEM_IN_LIST
+ }; /* button_context_standard */
 diff --git a/apps/lang/english.lang b/apps/lang/english.lang
 index 112c4d9257..8b7ff4d209 100644
 --- a/apps/lang/english.lang
