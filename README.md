@@ -3,21 +3,22 @@
 A custom operating system for iPods, built on [Rockbox](https://www.rockbox.org/).
 It dual boots with Apple's own software, so the iPod can always go back to it.
 
-Current version: **2.5.3**
+Current version: **2.5.4**
 
 ## Supported iPods
 
 | iPod | Build |
 |---|---|
 | iPod Classic 6th / 7th gen | `ipod6g` |
-| iPod Video 5th / 5.5 gen (30, 60 and 80 GB; the 64 MB build fits itself to 32 MB) | `ipodvideo --ram=64` |
+| iPod Video 5th gen (30 and 60 GB) | `ipodvideo --ram=64`, `EXTRA_DEFINES=-DASHER_VIDEO_GEN=50` |
+| iPod Video 5.5 gen (30 and 80 GB) | `ipodvideo --ram=64`, `EXTRA_DEFINES=-DASHER_VIDEO_GEN=55` |
 | iPod nano 3rd gen | `ipodnano3g` |
 
 ## What's in this repo
 
 - `asher_os_source.patch`: every Asher OS change, as one patch on top of Rockbox
   commit `e5092187c5219056dbd2dde99f5cf55515a6d37d`.
-- `.github/workflows/build.yml`: builds the firmware for all three iPods.
+- `.github/workflows/build.yml`: builds the firmware for every iPod above.
   Run it from the **Actions** tab ("Build Asher OS", then "Run workflow"); each
   iPod's firmware zip shows up under the run's artifacts.
 

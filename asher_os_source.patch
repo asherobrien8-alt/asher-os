@@ -1517,10 +1517,10 @@ index 0000000000..303fd28d90
 +#endif
 diff --git a/apps/asher/asher_model.c b/apps/asher/asher_model.c
 new file mode 100644
-index 0000000000..92015c485b
+index 0000000000..2d95516292
 --- /dev/null
 +++ b/apps/asher/asher_model.c
-@@ -0,0 +1,224 @@
+@@ -0,0 +1,227 @@
 +/* Asher OS 2.5.2: which iPod this is, exactly.
 + *
 + * The model number (like MB150) says the model, capacity, colour and year.
@@ -1691,17 +1691,20 @@ index 0000000000..92015c485b
 +    volume_size(IF_MV(0,) &size, &freek);
 +    int gb = (int)(((unsigned long long)size * 1024ULL) / 1000000000ULL);   /* marketing GB */
 +#if defined(IPOD_VIDEO)
-+    extern unsigned char probed_ramsize;
-+    strlcpy(m_name, "iPod Video", sizeof(m_name));
++    /* 2.5.4: there's a 5th gen and a 5.5 gen version of Asher OS; each
++     * knows which iPod it was made for. The capacity comes from the
++     * memory (30 GB ones have 32 MB) and the drive */
++    int cap = 30;
 +#ifndef SIMULATOR
-+    if (probed_ramsize <= 32)
-+        strlcpy(m_detail, "30 GB  -  5th or 5.5 gen", sizeof(m_detail));
-+    else if (gb > 65)
-+        strlcpy(m_detail, "80 GB  -  5.5 gen  -  Late 2006", sizeof(m_detail));
-+    else
-+        strlcpy(m_detail, "60 GB  -  5th gen  -  Late 2005", sizeof(m_detail));
++    extern unsigned char probed_ramsize;
++    if (probed_ramsize > 32) cap = gb > 65 ? 80 : 60;
++#endif
++#if defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
++    strlcpy(m_name, "iPod Video 5.5 gen", sizeof(m_name));
++    snprintf(m_detail, sizeof(m_detail), "%d GB  -  Late 2006", cap == 60 ? 80 : cap);
 +#else
-+    strlcpy(m_detail, "5th / 5.5 gen", sizeof(m_detail));
++    strlcpy(m_name, "iPod Video 5th gen", sizeof(m_name));
++    snprintf(m_detail, sizeof(m_detail), "%d GB  -  Late 2005", cap == 80 ? 60 : cap);
 +#endif
 +#elif defined(IPOD_NANO3G)
 +    strlcpy(m_name, "iPod nano 3rd gen", sizeof(m_name));
@@ -5011,10 +5014,10 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..87c4e4f5c3
+index 0000000000..ee71ee5838
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
-@@ -0,0 +1,587 @@
+@@ -0,0 +1,589 @@
 +/* Asher OS settings extras: click wheel sound toggle and the version screen. */
 +#include <stdio.h>
 +#include <string.h>
@@ -5039,9 +5042,11 @@ index 0000000000..87c4e4f5c3
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.5.3"
-+#if defined(IPOD_VIDEO)
-+#define MODEL_LABEL "iPod Video (5th/5.5 gen)"
++#define ASHER_OS_VERSION "2.5.4"
++#if defined(IPOD_VIDEO) && defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
++#define MODEL_LABEL "iPod Video (5.5 gen)"
++#elif defined(IPOD_VIDEO)
++#define MODEL_LABEL "iPod Video (5th gen)"
 +#elif defined(IPOD_NANO3G)
 +#define MODEL_LABEL "iPod nano (3rd gen)"
 +#else

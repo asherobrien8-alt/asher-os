@@ -12,6 +12,10 @@ jobs:
             configure: --target=ipod6g --type=n
           - name: iPod_Video_5th_gen
             configure: --target=ipodvideo --ram=64 --type=n
+            defines: -DASHER_VIDEO_GEN=50
+          - name: iPod_Video_5.5_gen
+            configure: --target=ipodvideo --ram=64 --type=n
+            defines: -DASHER_VIDEO_GEN=55
           - name: iPod_nano_3rd_gen
             configure: --target=ipodnano3g --type=n
     name: ${{ matrix.name }}
@@ -45,6 +49,9 @@ jobs:
           export PATH=$HOME/cross/bin:$PATH
           cd rockbox && mkdir build && cd build
           ../tools/configure ${{ matrix.configure }}
+          if [ -n "${{ matrix.defines }}" ]; then
+            sed -i 's/^export EXTRA_DEFINES=.*/export EXTRA_DEFINES=${{ matrix.defines }}/' Makefile
+          fi
           make -j$(nproc)
           make zip
       - name: Package
