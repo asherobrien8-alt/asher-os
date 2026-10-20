@@ -4483,10 +4483,10 @@ index 0000000000..a22315f7c8
 +#endif
 diff --git a/apps/asher/asher_prefs.c b/apps/asher/asher_prefs.c
 new file mode 100644
-index 0000000000..c6e4fb36ed
+index 0000000000..957d1b7184
 --- /dev/null
 +++ b/apps/asher/asher_prefs.c
-@@ -0,0 +1,158 @@
+@@ -0,0 +1,154 @@
 +#include <stdio.h>
 +#include <string.h>
 +#include <fcntl.h>
@@ -4598,13 +4598,9 @@ index 0000000000..c6e4fb36ed
 +        settings_save();
 +    }
 +#endif
-+#if !defined(SIMULATOR)
-+    if (batt >= 0)
-+    {
-+        void battery_hint_shown(int pct);
-+        battery_hint_shown(batt >= 99 ? 100 : batt);
-+    }
-+#endif
++    /* 2.5.3: the battery % is Rockbox's own reading again (no saved
++     * number carried over a restart) */
++    (void)batt;
 +}
 +
 +void asher_prefs_save(void)
@@ -5015,7 +5011,7 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..1346e8cd22
+index 0000000000..87c4e4f5c3
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,587 @@
@@ -5043,7 +5039,7 @@ index 0000000000..1346e8cd22
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.5.2"
++#define ASHER_OS_VERSION "2.5.3"
 +#if defined(IPOD_VIDEO)
 +#define MODEL_LABEL "iPod Video (5th/5.5 gen)"
 +#elif defined(IPOD_NANO3G)
@@ -13562,225 +13558,6 @@ index de48c890f9..6448e815bd 100644
  /* check whether USB is plugged, note that this is the raw hardware value */
  int usb_detect(void);
  #ifdef USB_STATUS_BY_EVENT
-diff --git a/firmware/powermgmt.c b/firmware/powermgmt.c
-index e89c0ce034..6044708149 100644
---- a/firmware/powermgmt.c
-+++ b/firmware/powermgmt.c
-@@ -21,6 +21,7 @@
- #include <stdio.h>
- #include <ctype.h>
- #include "config.h"
-+#include <stdlib.h>
- #include "system.h"
- #include "kernel.h"
- #include "thread.h"
-@@ -285,10 +286,30 @@ static void average_init(void)
- #endif
- }
- 
-+/* 2.5.2: a quick, fresh battery reading right after start-up */
-+#define ASHER_FAST_STEPS 4
-+static int asher_fast;              /* quick readings still to take */
-+static bool asher_fast_armed;       /* the quick readings have started */
-+static bool asher_cal_ready;        /* ...and are done */
-+static bool asher_calibrated;       /* the shown % comes from them now */
-+
- /* Sample the battery voltage/current and update the filters.
-  * Updated once every POWER_THREAD_STEP_TICKS. */
- static void average_step(bool low_battery)
- {
-+#if (CONFIG_BATTERY_MEASURE & VOLTAGE_MEASURE) && (defined(IPOD_6G) || defined(IPOD_VIDEO) || defined(IPOD_NANO3G)) && !defined(SIMULATOR) && !defined(BOOTLOADER)
-+    if (asher_fast > 0)
-+    {
-+        /* start-up: the slow average (a minute long) is replaced by a few
-+         * quick readings, so the % is right within a couple of seconds */
-+        int mv = (_battery_voltage() + _battery_voltage() + _battery_voltage()) / 3;
-+        if (asher_fast == ASHER_FAST_STEPS) voltage_now = mv;
-+        else voltage_now = (voltage_now + mv) / 2;
-+        voltage_avg = voltage_now * BATT_AVE_SAMPLES;
-+        if (--asher_fast == 0) asher_cal_ready = true;
-+        return;
-+    }
-+#endif
- #if CONFIG_BATTERY_MEASURE & VOLTAGE_MEASURE
-     int millivolts = _battery_voltage();
-     if(low_battery) {
-@@ -383,6 +404,25 @@ static int voltage_to_battery_level(int millivolts)
-  * This will be called by the power thread after polling new battery data.
-  * It must also be called if the battery type or capacity changes.
-  */
-+/* in the UI: remembers the % (saved the next time the disk spins anyway) */
-+void asher_batt_changed(int pct);
-+
-+/* Asher OS: the % that was showing at the last shutdown, given back by
-+ * the UI at start-up so a reboot doesn't change the number */
-+static int asher_batt_hint = -1;
-+static int asher_raw_level = 100;   /* the reading itself, before smoothing */
-+void battery_hint_shown(int pct)
-+{
-+#ifdef IPOD_NANO3G
-+    /* 2.5.1: the nano has no hard drive, so nothing drags the voltage down
-+     * at start-up: its own reading is right straight away (an old saved
-+     * number only made it show the wrong % for minutes) */
-+    (void)pct;
-+    return;
-+#endif
-+    if (pct >= 0 && pct <= 100) asher_batt_hint = pct;
-+}
-+
- static void battery_status_update(void)
- {
- #if ((CONFIG_BATTERY_MEASURE & PERCENTAGE_MEASURE) && (CONFIG_BATTERY_MEASURE & VOLTAGE_MEASURE))
-@@ -447,6 +487,113 @@ static void battery_status_update(void)
-         time_now = 0;
- #endif
- 
-+#if (defined(IPOD_6G) || defined(IPOD_VIDEO) || defined(IPOD_NANO3G)) && !defined(SIMULATOR) && !defined(BOOTLOADER)
-+    /* Asher OS: a steady battery %. Charging raises the voltage reading, so
-+     * plugging in or out used to make the number jump. Now it only climbs
-+     * while plugged in and only drops while unplugged, 1% at a time. */
-+    {
-+        /* 2.2.5: a short dip (hard drive spinning up) no longer counts:
-+         * it has to stay 2% lower for a while; a big gap (after charging,
-+         * or a reading that was off) closes faster; and a reading that
-+         * stays well above the number (battery recovered) brings it up */
-+        static int shown = -1, below, above;
-+        asher_raw_level = level;
-+        /* 2.5.2: start-up. Until a fresh reading is in (taken the moment
-+         * the hard drive rests, see power_thread_step), show the % from the
-+         * last shutdown - or the reading if that's clearly higher (it was
-+         * charged while off). Then switch to the fresh reading once. */
-+        if (asher_batt_hint >= 0)
-+        {
-+            if (!asher_calibrated)
-+                shown = (level >= 0 && level > asher_batt_hint + 10) ? level : asher_batt_hint;
-+            asher_batt_hint = -1;
-+        }
-+        if (!asher_calibrated)
-+        {
-+            if (asher_cal_ready && level >= 0)
-+            {
-+                asher_calibrated = true;
-+                shown = level;                 /* the fresh reading */
-+            }
-+            else
-+            {
-+                if (shown < 0) shown = level;
-+                percent_now = shown;
-+                send_battery_level_event(shown);
-+                return;
-+            }
-+        }
-+        static long next_step;
-+        if (level >= 0)
-+        {
-+            if (shown < 0)
-+                shown = level;
-+            else if (TIME_AFTER(current_tick, next_step))
-+            {
-+                bool plugged = charger_inserted();
-+                int gap = level - shown;
-+                long wait = 20 * HZ;
-+                if (plugged)
-+                {
-+                    /* 2.4.6: while charging the voltage jumps up straight
-+                     * away and then sits near full for hours, so it says
-+                     * little about the charge. Count up at the iPod's real
-+                     * charging speed instead: about 80% in 2 hours, then
-+                     * slower to full (roughly 4 hours in all) */
-+                    below = above = 0;
-+                    if (charging_state())
-+                    {
-+                        if (shown < 80)
-+                        {
-+                            wait = 90 * HZ;             /* ~40% an hour */
-+                            /* already topping off: it's at least ~80% */
-+                            if (voltage_now >= 4170) wait = 15 * HZ;
-+                            shown++;
-+                        }
-+                        else if (shown < 99)
-+                        {
-+                            wait = 6 * 60 * HZ;         /* ~10% an hour */
-+                            shown++;
-+                        }
-+                        else if (shown == 99 && voltage_now >= 4150)
-+                        {
-+                            /* 2.5.1: some iPods (the nano) never say the
-+                             * charge is done: at full voltage, call it 100 */
-+                            static int top_off;
-+                            if (++top_off >= 15)        /* ~5 minutes there */
-+                            {
-+                                top_off = 0;
-+                                shown = 100;
-+                            }
-+                        }
-+                    }
-+                    else if (shown < 100 && voltage_now >= 4100)
-+                    {
-+                        shown++;                        /* charge finished */
-+                        wait = 4 * HZ;
-+                    }
-+                }
-+                else
-+                {
-+                    below = gap <= -2 ? below + 1 : 0;
-+                    above = gap >= 5 ? above + 1 : 0;
-+                    if (below >= 3)                     /* ~1 minute low */
-+                    {
-+                        shown--;
-+                        if (gap <= -10) wait = 5 * HZ;  /* catching up */
-+                    }
-+                    else if (above >= 6)                /* ~2 minutes high */
-+                        shown++;
-+                }
-+                if (shown > 100) shown = 100;
-+                if (shown < 0) shown = 0;
-+                next_step = current_tick + wait;
-+            }
-+            level = shown;
-+            asher_batt_changed(shown);
-+        }
-+    }
-+#endif
-     percent_now = level;
-     send_battery_level_event(level);
- }
-@@ -738,6 +885,22 @@ static inline void power_thread_step(void)
-      * the disk is spinning unless we are in USB mode (the disk will most
-      * likely always be spinning in USB mode) or charging.
-      */
-+#if (defined(IPOD_6G) || defined(IPOD_VIDEO) || defined(IPOD_NANO3G)) && !defined(SIMULATOR) && !defined(BOOTLOADER)
-+    /* 2.5.2: the quick start-up readings, as soon as the hard drive rests
-+     * (right away on the nano), or after a minute whatever it's doing */
-+    if (!asher_fast_armed && (!storage_disk_is_active() || charger_inserted()
-+                              || TIME_AFTER(current_tick, 60 * HZ)))
-+    {
-+        asher_fast_armed = true;
-+        asher_fast = ASHER_FAST_STEPS;
-+    }
-+    if (asher_fast > 0)
-+    {
-+        average_step(false);
-+        battery_status_update();
-+        return;
-+    }
-+#endif
-     if (!storage_disk_is_active() || usb_inserted()
- #if CONFIG_CHARGING >= CHARGING_MONITOR
-             || charger_input_state == CHARGER
-@@ -746,7 +909,11 @@ static inline void power_thread_step(void)
-         average_step(false);
-         battery_status_update();
-     }
--    else if (percent_now < 8) {
-+    else if (percent_now < 8
-+#if (defined(IPOD_6G) || defined(IPOD_VIDEO) || defined(IPOD_NANO3G)) && !defined(SIMULATOR) && !defined(BOOTLOADER)
-+             || asher_raw_level < 8
-+#endif
-+            ) {
-         average_step(true);
-         battery_status_update();
- 
 diff --git a/firmware/target/arm/ata-nand-telechips.c b/firmware/target/arm/ata-nand-telechips.c
 index c7954e3188..e59255a3b4 100644
 --- a/firmware/target/arm/ata-nand-telechips.c
@@ -13884,34 +13661,6 @@ index 1f4ca13dc8..b463cfddbc 100644
  
      if (hold_button != hold_button_old)
      {
-diff --git a/firmware/target/arm/ipod/powermgmt-ipod-pcf.c b/firmware/target/arm/ipod/powermgmt-ipod-pcf.c
-index 2d82df6cf9..d89147b59c 100644
---- a/firmware/target/arm/ipod/powermgmt-ipod-pcf.c
-+++ b/firmware/target/arm/ipod/powermgmt-ipod-pcf.c
-@@ -61,8 +61,9 @@ unsigned short percent_to_volt_discharge[11] =
-     /* measured values */
-     3230, 3620, 3700, 3730, 3750, 3780, 3830, 3890, 3950, 4030, 4160
- #elif defined(IPOD_VIDEO)
--    /* iPod Video 30GB Li-Ion 400mAh */
--    3600, 3720, 3750, 3780, 3810, 3840, 3880, 3950, 4020, 4100, 4180
-+    /* Asher OS: the old table called 3.6 V empty while the iPod runs on
-+     * down to 3.3 V, so the last stretch showed 0% for ages */
-+    3450, 3680, 3740, 3770, 3800, 3830, 3870, 3940, 4010, 4090, 4170
- #elif defined(IPOD_COLOR)
-     /* iPod Photo 30GB, see FS#9072 */
-     3450, 3660, 3700, 3730, 3750, 3770, 3820, 3870, 3920, 4040, 4170
-@@ -84,8 +85,9 @@ unsigned short percent_to_volt_charge[11] =
-     /* measured values */
-     3230, 3620, 3700, 3730, 3750, 3780, 3830, 3890, 3950, 4030, 4160
- #elif defined(IPOD_VIDEO)
--    /* iPOD Video 30GB Li-Ion 400mAh */
--    3600, 3720, 3750, 3780, 3810, 3840, 3880, 3950, 4020, 4100, 4180
-+    /* Asher OS: was the same as unplugged, so plugging in made the %
-+     * jump up; charging lifts the voltage ~100-150 mV */
-+    3650, 3830, 3900, 3940, 3970, 4010, 4060, 4110, 4160, 4190, 4200
- #elif defined(IPOD_COLOR)
-     /* iPod Photo 30GB, see FS#9072 */
-     3450, 3660, 3700, 3730, 3750, 3770, 3820, 3870, 3920, 4040, 4170
 diff --git a/firmware/target/arm/ipod/video/lcd-video.c b/firmware/target/arm/ipod/video/lcd-video.c
 index 5ab9498e42..fc4f3d3a1d 100644
 --- a/firmware/target/arm/ipod/video/lcd-video.c
@@ -14081,21 +13830,6 @@ index 91d0da0c1a..8d04ceb978 100644
                  break;
          }
      }
-diff --git a/firmware/target/arm/s5l8702/ipod6g/powermgmt-6g.c b/firmware/target/arm/s5l8702/ipod6g/powermgmt-6g.c
-index 4af1d29889..1d8672aed0 100644
---- a/firmware/target/arm/s5l8702/ipod6g/powermgmt-6g.c
-+++ b/firmware/target/arm/s5l8702/ipod6g/powermgmt-6g.c
-@@ -39,7 +39,9 @@ unsigned short percent_to_volt_discharge[11] =
- /* voltages (millivolt) of 0%, 10%, ... 100% when charging enabled */
- unsigned short percent_to_volt_charge[11] =
- {
--    3700, 3820, 3900, 3950, 3990, 4030, 4070, 4120, 4170, 4190, 4200
-+    /* Asher OS: charging lifts the voltage ~100-150 mV until the last
-+     * stretch (held at 4.2 V); the % smoothing finishes off the top */
-+    3650, 3830, 3900, 3940, 3970, 4010, 4060, 4110, 4160, 4190, 4200
- };
- #endif /* CONFIG_CHARGING */
- 
 diff --git a/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c b/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c
 index 9509e1c0b8..fead002073 100644
 --- a/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c
