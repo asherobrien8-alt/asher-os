@@ -1,8 +1,8 @@
 diff --git a/apps/SOURCES b/apps/SOURCES
-index bb612b38fb..806b81eae2 100644
+index bb612b38fb..42addc73b9 100644
 --- a/apps/SOURCES
 +++ b/apps/SOURCES
-@@ -20,6 +20,23 @@ menu.c
+@@ -20,6 +20,24 @@ menu.c
  menus/menu_common.c
  menus/display_menu.c
  menus/theme_menu.c
@@ -14,6 +14,7 @@ index bb612b38fb..806b81eae2 100644
 +asher/asher_home.c
 +asher/asher_ui.c
 +asher/asher_font3d.c
++asher/asher_model.c
 +asher/asher_list.c
 +asher/asher_music.c
 +asher/asher_nowplaying.c
@@ -245,10 +246,10 @@ index 0000000000..7aed25e428
 +#endif
 diff --git a/apps/asher/asher_font3d.c b/apps/asher/asher_font3d.c
 new file mode 100644
-index 0000000000..0d38d7d4b0
+index 0000000000..06c63876a7
 --- /dev/null
 +++ b/apps/asher/asher_font3d.c
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,306 @@
 +/* Asher OS 2.5: the 3D retro lettering and the pop-up messages.
 + *
 + * Letters (from Oswald, SIL Open Font License) come pre-drawn in
@@ -368,6 +369,8 @@ index 0000000000..0d38d7d4b0
 +{
 +    if (!f3d_ok(which) || !s) return;
 +    const struct atf *f = &f3[which];
++    /* F3D_PLAIN in the colour: just the letters (on a coloured tag) */
++    bool plain = (rgb & F3D_PLAIN) != 0;
 +    unsigned fr = (rgb >> 16) & 255, fg = (rgb >> 8) & 255, fb = rgb & 255;
 +    /* dark letters get a light outline, light ones a black one */
 +    bool dark = fr * 3 + fg * 6 + fb < 1100;
@@ -382,7 +385,7 @@ index 0000000000..0d38d7d4b0
 +        if ((c & 0xc0) == 0x80) continue;
 +        int g = glyph(f, c >= 0x80 ? '?' : c);
 +        int gw = f->w[g];
-+        for (int p = 0; p < 3; p++)
++        for (int p = plain ? 2 : 0; p < 3; p++)
 +        {
 +            const unsigned char *pl = f->pl[p] + f->ox[g];
 +            for (int j = 0; j < f->h; j++)
@@ -555,15 +558,16 @@ index 0000000000..0d38d7d4b0
 +}
 diff --git a/apps/asher/asher_font3d.h b/apps/asher/asher_font3d.h
 new file mode 100644
-index 0000000000..1943e1ba4d
+index 0000000000..541fe549c4
 --- /dev/null
 +++ b/apps/asher/asher_font3d.h
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,19 @@
 +#ifndef ASHER_FONT3D_H
 +#define ASHER_FONT3D_H
 +#include <stdbool.h>
 +/* the 3D retro lettering (see asher_font3d.c) */
 +enum { F3D_BIG, F3D_SMALL, F3D_TINY };
++#define F3D_PLAIN 0x01000000   /* or into the colour: no outline or side */
 +void f3d_init(void);
 +bool f3d_ok(int which);
 +int  f3d_h(int which);
@@ -1510,6 +1514,250 @@ index 0000000000..303fd28d90
 +size_t asher_mem_avail(void);
 +void asher_mem_lend(void);           /* around Rockbox loading skins/fonts */
 +void asher_mem_back(void);        /* free without pausing the music */
++#endif
+diff --git a/apps/asher/asher_model.c b/apps/asher/asher_model.c
+new file mode 100644
+index 0000000000..92015c485b
+--- /dev/null
++++ b/apps/asher/asher_model.c
+@@ -0,0 +1,224 @@
++/* Asher OS 2.5.2: which iPod this is, exactly.
++ *
++ * The model number (like MB150) says the model, capacity, colour and year.
++ * It is read once and kept in /.rockbox/asher/model.txt:
++ *  - 6th/7th gen and nano 3rd gen: from the iPod's own settings chip (SysCfg)
++ *  - 5th/5.5 gen: from the SysInfo file Apple's software keeps on the drive
++ *    (iPod_Control/Device/SysInfo)
++ * If neither is there, a good guess from the hardware is shown instead (and
++ * not kept, so the real number is picked up once it can be read). */
++#include <stdio.h>
++#include <string.h>
++#include <stdlib.h>
++#include "config.h"
++#include "system.h"
++#include "file.h"
++#include "string-extra.h"
++#include "disk.h"
++#include "asher_model.h"
++#if (CONFIG_CPU == S5L8702) && !defined(SIMULATOR)
++#include "norboot-target.h"
++#endif
++
++#define MODEL_FILE "/.rockbox/asher/model.txt"
++
++struct known { const char *code, *name, *detail; };
++static const struct known models[] = {
++    /* iPod Video, 5th gen (October 2005) */
++    { "A002", "iPod Video 5th gen", "30 GB  -  White  -  Late 2005" },
++    { "A146", "iPod Video 5th gen", "30 GB  -  Black  -  Late 2005" },
++    { "A003", "iPod Video 5th gen", "60 GB  -  White  -  Late 2005" },
++    { "A147", "iPod Video 5th gen", "60 GB  -  Black  -  Late 2005" },
++    { "A452", "iPod Video 5th gen", "30 GB  -  U2 Special Edition  -  2005" },
++    /* iPod Video, 5.5 gen (September 2006) */
++    { "A444", "iPod Video 5.5 gen", "30 GB  -  White  -  Late 2006" },
++    { "A446", "iPod Video 5.5 gen", "30 GB  -  Black  -  Late 2006" },
++    { "A448", "iPod Video 5.5 gen", "80 GB  -  White  -  Late 2006" },
++    { "A450", "iPod Video 5.5 gen", "80 GB  -  Black  -  Late 2006" },
++    { "A664", "iPod Video 5.5 gen", "30 GB  -  U2 Special Edition  -  2006" },
++    /* iPod Classic */
++    { "B029", "iPod Classic 6th gen", "80 GB  -  Silver  -  2007" },
++    { "B147", "iPod Classic 6th gen", "80 GB  -  Black  -  2007" },
++    { "B145", "iPod Classic 6th gen", "160 GB  -  Silver  -  2007" },
++    { "B150", "iPod Classic 6th gen", "160 GB  -  Black  -  2007" },
++    { "B562", "iPod Classic 6.5 gen", "120 GB  -  Silver  -  2008" },
++    { "B565", "iPod Classic 6.5 gen", "120 GB  -  Black  -  2008" },
++    { "C293", "iPod Classic 7th gen", "160 GB  -  Silver  -  2009" },
++    { "C297", "iPod Classic 7th gen", "160 GB  -  Black  -  2009" },
++    /* iPod nano, 3rd gen (September 2007) */
++    { "A978", "iPod nano 3rd gen", "4 GB  -  Silver  -  2007" },
++    { "A980", "iPod nano 3rd gen", "8 GB  -  Silver  -  2007" },
++    { "B261", "iPod nano 3rd gen", "8 GB  -  Black  -  2007" },
++    { "B249", "iPod nano 3rd gen", "8 GB  -  Blue  -  2007" },
++    { "B253", "iPod nano 3rd gen", "8 GB  -  Green  -  2007" },
++    { "B257", "iPod nano 3rd gen", "8 GB  -  (PRODUCT) RED  -  2007" },
++    { "B453", "iPod nano 3rd gen", "8 GB  -  Pink  -  2008" },
++};
++
++static char m_code[16];      /* "MB150" style */
++static char m_serial[24];
++static char m_name[48], m_detail[64];
++static bool m_done;
++
++/* "xB150", "MB150LL/A", "B150" -> "B150" (the letter and 3 digits) */
++static bool short_code(const char *s, char *out)
++{
++    while (*s == ' ') s++;
++    size_t n = strlen(s);
++    for (size_t i = 0; i + 4 <= n; i++)
++        if ((s[i] == 'A' || s[i] == 'B' || s[i] == 'C')
++            && s[i + 1] >= '0' && s[i + 1] <= '9' && s[i + 2] >= '0' && s[i + 2] <= '9'
++            && s[i + 3] >= '0' && s[i + 3] <= '9')
++        {
++            memcpy(out, s + i, 4);
++            out[4] = 0;
++            return true;
++        }
++    return false;
++}
++
++static void clean(char *s)
++{
++    char *e = s + strlen(s);
++    while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = 0;
++}
++
++static bool read_saved(void)
++{
++    char buf[64];
++    int fd = open(MODEL_FILE, O_RDONLY);
++    if (fd < 0) return false;
++    int n = read(fd, buf, sizeof(buf) - 1);
++    close(fd);
++    if (n <= 0) return false;
++    buf[n] = 0;
++    char *nl = strchr(buf, '\n');
++    if (nl) { *nl = 0; strlcpy(m_serial, nl + 1, sizeof(m_serial)); clean(m_serial); }
++    clean(buf);
++    strlcpy(m_code, buf, sizeof(m_code));
++    return m_code[0] != 0;
++}
++
++static void save(void)
++{
++    char buf[64];
++    int n = snprintf(buf, sizeof(buf), "%s\n%s\n", m_code, m_serial);
++    int fd = open(MODEL_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
++    if (fd >= 0) { write(fd, buf, n); close(fd); }
++}
++
++#if (CONFIG_CPU == S5L8702) && !defined(SIMULATOR)
++static bool read_syscfg(void)
++{
++    static struct SysCfg sc;
++    if (syscfg_read(&sc) != 0) return false;
++    size_t n = MIN(sc.header.num_entries, SYSCFG_MAX_ENTRIES);
++    bool got = false;
++    for (size_t i = 0; i < n; i++)
++    {
++        char v[17];
++        memcpy(v, sc.entries[i].data, 16);
++        v[16] = 0;
++        if (sc.entries[i].tag == SYSCFG_TAG_MODN && v[0])
++        {
++            char c[8];
++            if (short_code(v, c)) { snprintf(m_code, sizeof(m_code), "M%s", c); got = true; }
++        }
++        else if (sc.entries[i].tag == SYSCFG_TAG_SRNM && v[0])
++            strlcpy(m_serial, v, sizeof(m_serial));
++    }
++    return got;
++}
++#endif
++
++/* SysInfo: lines like "ModelNumStr: xA446" and "pszSerialNumber: 8K6..." */
++static bool read_sysinfo(void)
++{
++    static char buf[2048];
++    int fd = open("/iPod_Control/Device/SysInfo", O_RDONLY);
++    if (fd < 0) return false;
++    int n = read(fd, buf, sizeof(buf) - 1);
++    close(fd);
++    if (n <= 0) return false;
++    buf[n] = 0;
++    bool got = false;
++    for (char *line = buf; line && *line; )
++    {
++        char *next = strchr(line, '\n');
++        if (next) *next++ = 0;
++        clean(line);
++        char c[8];
++        if (!strncmp(line, "ModelNumStr:", 12) && short_code(line + 12, c))
++            { snprintf(m_code, sizeof(m_code), "M%s", c); got = true; }
++        else if (!strncmp(line, "pszSerialNumber:", 16))
++        {
++            const char *v = line + 16;
++            while (*v == ' ') v++;
++            strlcpy(m_serial, v, sizeof(m_serial));
++        }
++        line = next;
++    }
++    return got;
++}
++
++/* no model number anywhere: a good guess from the hardware */
++static void guess(void)
++{
++    sector_t size = 0, freek = 0;
++    volume_size(IF_MV(0,) &size, &freek);
++    int gb = (int)(((unsigned long long)size * 1024ULL) / 1000000000ULL);   /* marketing GB */
++#if defined(IPOD_VIDEO)
++    extern unsigned char probed_ramsize;
++    strlcpy(m_name, "iPod Video", sizeof(m_name));
++#ifndef SIMULATOR
++    if (probed_ramsize <= 32)
++        strlcpy(m_detail, "30 GB  -  5th or 5.5 gen", sizeof(m_detail));
++    else if (gb > 65)
++        strlcpy(m_detail, "80 GB  -  5.5 gen  -  Late 2006", sizeof(m_detail));
++    else
++        strlcpy(m_detail, "60 GB  -  5th gen  -  Late 2005", sizeof(m_detail));
++#else
++    strlcpy(m_detail, "5th / 5.5 gen", sizeof(m_detail));
++#endif
++#elif defined(IPOD_NANO3G)
++    strlcpy(m_name, "iPod nano 3rd gen", sizeof(m_name));
++    snprintf(m_detail, sizeof(m_detail), "%d GB  -  2007", gb > 6 ? 8 : 4);
++#else
++    strlcpy(m_name, "iPod Classic", sizeof(m_name));
++    snprintf(m_detail, sizeof(m_detail), "%d GB", gb > 140 ? 160 : (gb > 100 ? 120 : 80));
++#endif
++}
++
++static void describe(void)
++{
++    char c[8];
++    if (short_code(m_code, c))
++        for (unsigned i = 0; i < sizeof(models) / sizeof(models[0]); i++)
++            if (!strcmp(models[i].code, c))
++            {
++                strlcpy(m_name, models[i].name, sizeof(m_name));
++                strlcpy(m_detail, models[i].detail, sizeof(m_detail));
++                return;
++            }
++    /* a number we don't know: the hardware guess, with the number */
++    guess();
++}
++
++static void detect(void)
++{
++    if (m_done) return;
++    m_done = true;
++    if (read_saved()) { describe(); return; }
++    bool got = false;
++#if (CONFIG_CPU == S5L8702) && !defined(SIMULATOR)
++    got = read_syscfg();
++#endif
++    if (!got) got = read_sysinfo();
++    if (got) { save(); describe(); }
++    else guess();
++}
++
++const char *asher_model_name(void)   { detect(); return m_name; }
++const char *asher_model_detail(void) { detect(); return m_detail; }
++const char *asher_model_number(void) { detect(); return m_code; }
++const char *asher_model_serial(void) { detect(); return m_serial; }
+diff --git a/apps/asher/asher_model.h b/apps/asher/asher_model.h
+new file mode 100644
+index 0000000000..602c7f6ed6
+--- /dev/null
++++ b/apps/asher/asher_model.h
+@@ -0,0 +1,8 @@
++#ifndef ASHER_MODEL_H
++#define ASHER_MODEL_H
++/* which iPod this is (read once, then kept; see asher_model.c) */
++const char *asher_model_name(void);     /* "iPod Classic 6th gen" */
++const char *asher_model_detail(void);   /* "160 GB  -  Black  -  2007" */
++const char *asher_model_number(void);   /* "MB150" ("" if unknown) */
++const char *asher_model_serial(void);   /* "" if unknown */
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
@@ -4767,10 +5015,10 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..c57acbf1bf
+index 0000000000..1346e8cd22
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
-@@ -0,0 +1,577 @@
+@@ -0,0 +1,587 @@
 +/* Asher OS settings extras: click wheel sound toggle and the version screen. */
 +#include <stdio.h>
 +#include <string.h>
@@ -4793,8 +5041,9 @@ index 0000000000..c57acbf1bf
 +#include "asher_prefs.h"
 +#include "button.h"
 +#include "asher_check.h"
++#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.5.1"
++#define ASHER_OS_VERSION "2.5.2"
 +#if defined(IPOD_VIDEO)
 +#define MODEL_LABEL "iPod Video (5th/5.5 gen)"
 +#elif defined(IPOD_NANO3G)
@@ -4848,7 +5097,7 @@ index 0000000000..c57acbf1bf
 +    aui_vgrad(0, 0, AUI_W, AUI_H, t->bg_top, t->bg_bot);
 +    aui_topbar();
 +    /* storage card */
-+    int cy = 104, ch = 98;
++    int cy = 134, ch = 94;
 +    aui_round(10, cy, AUI_W - 20, ch, 12, t->light ? 0xffffff : 0x22253f,
 +              t->light ? 0xf4f5f8 : 0x1a1c33);
 +    if (size)
@@ -4860,9 +5109,18 @@ index 0000000000..c57acbf1bf
 +    y += 26;
 +    aui_text(AF_BIG, AUI_W / 2, y, t->text, "Version " ASHER_OS_VERSION, AUI_W - 20, 1);
 +    y += 22;
-+    if (bat >= 0)
++    /* 2.5.2: exactly which iPod this is (read once, then kept) */
++    aui_text(AF_SMALL, AUI_W / 2, y, t->text, asher_model_name(), AUI_W - 20, 1);
++    y += 15;
++    aui_text(AF_SMALLR, AUI_W / 2, y, t->sub, asher_model_detail(), AUI_W - 20, 1);
++    y += 15;
 +    {
-+        snprintf(buf, sizeof(buf), "Battery %d%%   -   " MODEL_LABEL, bat);
++        const char *num = asher_model_number(), *ser = asher_model_serial();
++        char bb[16] = "";
++        if (bat >= 0) snprintf(bb, sizeof(bb), "Battery %d%%", bat);
++        if (num[0] && ser[0]) snprintf(buf, sizeof(buf), "Model %s   -   Serial %s", num, ser);
++        else if (num[0]) snprintf(buf, sizeof(buf), "Model %s   -   %s", num, bb);
++        else strlcpy(buf, bb, sizeof(buf));
 +        aui_text(AF_SMALLR, AUI_W / 2, y, t->sub, buf, AUI_W - 20, 1);
 +    }
 +
@@ -5368,10 +5626,10 @@ index 0000000000..5349121a88
 +#endif
 diff --git a/apps/asher/asher_stats.c b/apps/asher/asher_stats.c
 new file mode 100644
-index 0000000000..5b644b3fad
+index 0000000000..2ae4375ba7
 --- /dev/null
 +++ b/apps/asher/asher_stats.c
-@@ -0,0 +1,354 @@
+@@ -0,0 +1,358 @@
 +/* Asher OS Stats screen, laid out as retro desktop windows:
 + * album_art.jpg, wallpaper.gif (live), now_playing.txt and moon.jpeg. */
 +#include <stdio.h>
@@ -5389,6 +5647,7 @@ index 0000000000..5b644b3fad
 +#include "timefuncs.h"
 +#include "settings.h"
 +#include "asher_ui.h"
++#include "asher_font3d.h"
 +#include "asher_music.h"
 +#include "asher_media.h"
 +#include "asher_quick.h"
@@ -5614,6 +5873,10 @@ index 0000000000..5b644b3fad
 +        aui_progress(INFO_X + 5, INFO_Y + 44, 128, 5, aui_volume_pct(), 100);
 +    else if (playing)
 +        aui_progress(INFO_X + 5, INFO_Y + 44, 128, 5, pos, id3->length);
++    /* 2.5.2: play state and shuffle in the same style as the rest of the
++     * window's text (deep colours with the light outline): easy to read */
++    const char *state = !playing ? NULL : (paused ? "> currently paused" : "> currently playing");
++    const char *shuf = global_settings.playlist_shuffle ? "shuffle:on" : "shuffle:off";
 +    aui_present();
 +
 +    if (wp)
@@ -5624,8 +5887,7 @@ index 0000000000..5b644b3fad
 +
 +    if (playing)
 +    {
-+        aui_text(AF_RETRO_T, INFO_X + 5, INFO_Y + 17, paused ? C_PAUSE : C_PLAY,
-+                 paused ? "> currently paused" : "> currently playing", 130, 0);
++        aui_text(AF_RETRO_T, INFO_X + 5, INFO_Y + 16, paused ? 0xa8440c : 0x0d6b3c, state, 130, 0);
 +        if (id3->bitrate)
 +        {
 +            snprintf(buf, sizeof(buf), "%d kbps", id3->bitrate);
@@ -5651,23 +5913,23 @@ index 0000000000..5b644b3fad
 +        aui_text(AF_SMALL, INFO_X + 5, INFO_Y + 30, C_TEXT, "Pick something in Music", 188, 0);
 +    }
 +    /* shuffle state in the now_playing.txt title bar (centre button flips it) */
-+    aui_text(AF_RETRO_T, INFO_X + 166, INFO_Y + 2,
-+             global_settings.playlist_shuffle ? C_PLAY : C_SUB,
-+             global_settings.playlist_shuffle ? "shuffle:on" : "shuffle:off", 76, 2);
++    aui_text(AF_RETRO_T, INFO_X + 166, INFO_Y + 1,
++             global_settings.playlist_shuffle ? 0x0d6b3c : 0x5446c8, shuf, 76, 2);
 +    /* moon phase, then the free space under it (the date is in the top bar) */
 +    {
 +        char f1[16], t1[16];
 +        bool st = storage_str(f1, sizeof(f1), t1, sizeof(t1));
-+        int ly = st ? MOON_Y + 11 : MOON_Y + 20;
++        /* 2.5.2: below the title bar (it used to touch it) */
++        int ly = st ? MOON_Y + 14 : MOON_Y + 22;
 +        aui_text(AF_RETRO_T, MOON_X + 43, ly, C_TEXT, moon_l1[ph], 57, 0);
-+        aui_text(AF_RETRO_T, MOON_X + 43, ly + 10, C_TEXT, moon_l2[ph], 57, 0);
++        aui_text(AF_RETRO_T, MOON_X + 43, ly + 9, C_TEXT, moon_l2[ph], 57, 0);
 +        if (st)
 +        {
 +            snprintf(buf, sizeof(buf), "%s GB", f1);
-+            aui_text(AF_RETRO_T, MOON_X + 43, ly + 21, C_PLAY, buf, 57, 0);
++            aui_text(AF_RETRO_T, MOON_X + 43, ly + 18, C_PLAY, buf, 57, 0);
 +            snprintf(buf, sizeof(buf), "free of %s", t1);
 +            if (aui_text_w(AF_RETRO_T, buf) > 57) strcpy(buf, "free");
-+            aui_text(AF_RETRO_T, MOON_X + 43, ly + 31, C_SUB, buf, 57, 0);
++            aui_text(AF_RETRO_T, MOON_X + 43, ly + 27, C_SUB, buf, 57, 0);
 +        }
 +    }
 +    aui_topbar_text("Stats");
@@ -13301,7 +13563,7 @@ index de48c890f9..6448e815bd 100644
  int usb_detect(void);
  #ifdef USB_STATUS_BY_EVENT
 diff --git a/firmware/powermgmt.c b/firmware/powermgmt.c
-index e89c0ce034..46886dcb6c 100644
+index e89c0ce034..6044708149 100644
 --- a/firmware/powermgmt.c
 +++ b/firmware/powermgmt.c
 @@ -21,6 +21,7 @@
@@ -13312,7 +13574,38 @@ index e89c0ce034..46886dcb6c 100644
  #include "system.h"
  #include "kernel.h"
  #include "thread.h"
-@@ -383,6 +384,25 @@ static int voltage_to_battery_level(int millivolts)
+@@ -285,10 +286,30 @@ static void average_init(void)
+ #endif
+ }
+ 
++/* 2.5.2: a quick, fresh battery reading right after start-up */
++#define ASHER_FAST_STEPS 4
++static int asher_fast;              /* quick readings still to take */
++static bool asher_fast_armed;       /* the quick readings have started */
++static bool asher_cal_ready;        /* ...and are done */
++static bool asher_calibrated;       /* the shown % comes from them now */
++
+ /* Sample the battery voltage/current and update the filters.
+  * Updated once every POWER_THREAD_STEP_TICKS. */
+ static void average_step(bool low_battery)
+ {
++#if (CONFIG_BATTERY_MEASURE & VOLTAGE_MEASURE) && (defined(IPOD_6G) || defined(IPOD_VIDEO) || defined(IPOD_NANO3G)) && !defined(SIMULATOR) && !defined(BOOTLOADER)
++    if (asher_fast > 0)
++    {
++        /* start-up: the slow average (a minute long) is replaced by a few
++         * quick readings, so the % is right within a couple of seconds */
++        int mv = (_battery_voltage() + _battery_voltage() + _battery_voltage()) / 3;
++        if (asher_fast == ASHER_FAST_STEPS) voltage_now = mv;
++        else voltage_now = (voltage_now + mv) / 2;
++        voltage_avg = voltage_now * BATT_AVE_SAMPLES;
++        if (--asher_fast == 0) asher_cal_ready = true;
++        return;
++    }
++#endif
+ #if CONFIG_BATTERY_MEASURE & VOLTAGE_MEASURE
+     int millivolts = _battery_voltage();
+     if(low_battery) {
+@@ -383,6 +404,25 @@ static int voltage_to_battery_level(int millivolts)
   * This will be called by the power thread after polling new battery data.
   * It must also be called if the battery type or capacity changes.
   */
@@ -13338,7 +13631,7 @@ index e89c0ce034..46886dcb6c 100644
  static void battery_status_update(void)
  {
  #if ((CONFIG_BATTERY_MEASURE & PERCENTAGE_MEASURE) && (CONFIG_BATTERY_MEASURE & VOLTAGE_MEASURE))
-@@ -447,6 +467,117 @@ static void battery_status_update(void)
+@@ -447,6 +487,113 @@ static void battery_status_update(void)
          time_now = 0;
  #endif
  
@@ -13352,36 +13645,32 @@ index e89c0ce034..46886dcb6c 100644
 +         * or a reading that was off) closes faster; and a reading that
 +         * stays well above the number (battery recovered) brings it up */
 +        static int shown = -1, below, above;
-+        static long settle_until;
++        asher_raw_level = level;
++        /* 2.5.2: start-up. Until a fresh reading is in (taken the moment
++         * the hard drive rests, see power_thread_step), show the % from the
++         * last shutdown - or the reading if that's clearly higher (it was
++         * charged while off). Then switch to the fresh reading once. */
 +        if (asher_batt_hint >= 0)
 +        {
-+            /* the % shown before the last shutdown: start from it. Right
-+             * after start-up the hard drive spinning up drags the voltage
-+             * down (40% could read as 7%), so for the first few minutes
-+             * the reading is not trusted to lower the number */
-+            shown = asher_batt_hint;
-+            settle_until = current_tick + 3 * 60 * HZ;
++            if (!asher_calibrated)
++                shown = (level >= 0 && level > asher_batt_hint + 10) ? level : asher_batt_hint;
 +            asher_batt_hint = -1;
 +        }
-+        /* 2.4.4: ...but a battery that reads nearly empty with the disk
-+         * at rest is really flat: show that, so it can warn and shut down
-+         * properly instead of cutting out */
-+        asher_raw_level = level;
-+        if (settle_until && level >= 0 && level <= 5 && !storage_disk_is_active()
-+            && TIME_AFTER(current_tick, settle_until - 3 * 60 * HZ + 20 * HZ))
++        if (!asher_calibrated)
 +        {
-+            settle_until = 0;
-+            shown = level;
++            if (asher_cal_ready && level >= 0)
++            {
++                asher_calibrated = true;
++                shown = level;                 /* the fresh reading */
++            }
++            else
++            {
++                if (shown < 0) shown = level;
++                percent_now = shown;
++                send_battery_level_event(shown);
++                return;
++            }
 +        }
-+        if (settle_until && TIME_BEFORE(current_tick, settle_until)
-+            && !charger_inserted())
-+        {
-+            level = shown;
-+            percent_now = level;
-+            send_battery_level_event(level);
-+            return;
-+        }
-+        settle_until = 0;
 +        static long next_step;
 +        if (level >= 0)
 +        {
@@ -13456,7 +13745,30 @@ index e89c0ce034..46886dcb6c 100644
      percent_now = level;
      send_battery_level_event(level);
  }
-@@ -746,7 +877,11 @@ static inline void power_thread_step(void)
+@@ -738,6 +885,22 @@ static inline void power_thread_step(void)
+      * the disk is spinning unless we are in USB mode (the disk will most
+      * likely always be spinning in USB mode) or charging.
+      */
++#if (defined(IPOD_6G) || defined(IPOD_VIDEO) || defined(IPOD_NANO3G)) && !defined(SIMULATOR) && !defined(BOOTLOADER)
++    /* 2.5.2: the quick start-up readings, as soon as the hard drive rests
++     * (right away on the nano), or after a minute whatever it's doing */
++    if (!asher_fast_armed && (!storage_disk_is_active() || charger_inserted()
++                              || TIME_AFTER(current_tick, 60 * HZ)))
++    {
++        asher_fast_armed = true;
++        asher_fast = ASHER_FAST_STEPS;
++    }
++    if (asher_fast > 0)
++    {
++        average_step(false);
++        battery_status_update();
++        return;
++    }
++#endif
+     if (!storage_disk_is_active() || usb_inserted()
+ #if CONFIG_CHARGING >= CHARGING_MONITOR
+             || charger_input_state == CHARGER
+@@ -746,7 +909,11 @@ static inline void power_thread_step(void)
          average_step(false);
          battery_status_update();
      }

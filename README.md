@@ -3,7 +3,7 @@
 A custom operating system for iPods, built on [Rockbox](https://www.rockbox.org/).
 It dual boots with Apple's own software, so the iPod can always go back to it.
 
-Current version: **2.5.1**
+Current version: **2.5.2**
 
 ## Supported iPods
 
