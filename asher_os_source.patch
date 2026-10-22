@@ -4330,13 +4330,14 @@ index 0000000000..737ca190a2
 +}
 diff --git a/apps/asher/asher_power.c b/apps/asher/asher_power.c
 new file mode 100644
-index 0000000000..11249ef4be
+index 0000000000..bc67bfdc64
 --- /dev/null
 +++ b/apps/asher/asher_power.c
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,301 @@
 +/* Asher OS power down: a retro sunset. The big number counts 3, 2, 1 while
 + * the sun sinks below the neon horizon, then the picture switches off like
-+ * an old TV. Pressing Menu during the countdown cancels it. */
++ * an old TV. Pressing Menu during the countdown cancels it.
++ * At 1% battery there's a separate low-battery screen (below). */
 +#include <stdio.h>
 +#include <string.h>
 +#include "config.h"
@@ -4349,6 +4350,7 @@ index 0000000000..11249ef4be
 +#include "asher_ui.h"
 +#include "asher_power.h"
 +#include "asher_prefs.h"
++#include "asher_font3d.h"
 +
 +#define SECS 5
 +
@@ -4435,9 +4437,141 @@ index 0000000000..11249ef4be
 +    lcd_fillrect(0, 0, LCD_WIDTH, LCD_HEIGHT);
 +    lcd_update();
 +}
++
++/* ---- 2.5.6: low battery. At 1% the iPod shuts itself down: a black
++ * screen with a big empty battery, "LOW BATTERY / SHUTTING DOWN" and a
++ * 5 second countdown that can't be cancelled. It ends by crumbling to
++ * black (the normal power-down switches off like an old TV instead) ---- */
++
++static void lb_rect(int x, int y, int w, int h, unsigned rgb)
++{
++    if (w <= 0 || h <= 0) return;
++    lcd_set_foreground(LCD_RGBPACK((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255));
++    lcd_fillrect(x, y, w, h);
++}
++
++/* chunky 7-segment digit: a b c d e f g */
++static const unsigned char seg7[10] = {
++    0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f };
++
++static void lb_digit(int d, int x, int y, int w, int h, int t, unsigned rgb)
++{
++    unsigned m = seg7[d % 10];
++    int hh = h / 2, gy = y + hh - t / 2;
++    /* blocky segments that meet at the corners, like pixel-font digits */
++    if (m & 0x01) lb_rect(x, y, w, t, rgb);                            /* a */
++    if (m & 0x02) lb_rect(x + w - t, y, t, gy - y + t, rgb);           /* b */
++    if (m & 0x04) lb_rect(x + w - t, gy, t, y + h - gy, rgb);          /* c */
++    if (m & 0x08) lb_rect(x, y + h - t, w, t, rgb);                    /* d */
++    if (m & 0x10) lb_rect(x, gy, t, y + h - gy, rgb);                  /* e */
++    if (m & 0x20) lb_rect(x, y, t, gy - y + t, rgb);                   /* f */
++    if (m & 0x40) lb_rect(x, gy, w, t, rgb);                           /* g */
++}
++
++#define LB_CREAM 0xfff0dc
++#define LB_RED   0xff3a2a     /* bright, so it still stands out for protan */
++
++static void lb_frame(long t)
++{
++    const int W = LCD_WIDTH, H = LCD_HEIGHT;
++    long total = SECS * HZ;
++    if (t > total) t = total;
++    lcd_set_viewport(NULL);
++    lcd_set_drawmode(DRMODE_SOLID);
++    lb_rect(0, 0, W, H, 0x000000);
++
++    /* big battery, outline and nub */
++    int bw = W * 58 / 100, bh = H * 40 / 100;
++    int th = W >= 300 ? 5 : 3;
++    int nw = th + 3, nh = bh * 40 / 100;
++    int bx = (W - bw - nw) / 2, by = H * 8 / 100;
++    lb_rect(bx, by, bw, th, LB_CREAM);
++    lb_rect(bx, by + bh - th, bw, th, LB_CREAM);
++    lb_rect(bx, by, th, bh, LB_CREAM);
++    lb_rect(bx + bw - th, by, th, bh, LB_CREAM);
++    lb_rect(bx + bw, by + (bh - nh) / 2, nw, nh, LB_CREAM);
++
++    /* the last bit of charge: a red sliver that blinks */
++    int gap = th + (th > 3 ? 3 : 2);
++    int ix = bx + gap, iy = by + gap, ih = bh - 2 * gap;
++    if ((t / (HZ / 2)) % 2 == 0)
++        lb_rect(ix, iy, (bw - 2 * gap) / 9, ih, LB_RED);
++
++    /* countdown in the battery */
++    int left = (int)((total - t + HZ - 1) / HZ);
++    if (left < 0) left = 0;
++    int dh = ih * 76 / 100, dw = dh * 58 / 100, dt = dh / 5;
++    if (dt < 2) dt = 2;
++    lb_digit(left, bx + (bw - dw) / 2 + bw / 20, iy + (ih - dh) / 2, dw, dh, dt, LB_CREAM);
++
++    /* the words */
++    const char *l1 = "LOW BATTERY", *l2 = "SHUTTING DOWN";
++    int y1 = by + bh + H * 7 / 100;
++    if (f3d_ok(F3D_BIG))
++    {
++        f3d_draw(F3D_BIG, (W - f3d_text_w(F3D_BIG, l1)) / 2, y1, LB_RED, l1);
++        y1 += f3d_h(F3D_BIG) + 2;
++    }
++    else
++    {
++        lcd_set_foreground(LCD_RGBPACK(255, 58, 42));
++        lcd_set_background(LCD_BLACK);
++        lcd_putsxy((W - 11 * 6) / 2, y1, l1);
++        y1 += 14;
++    }
++    if (f3d_ok(F3D_SMALL))
++        f3d_draw(F3D_SMALL, (W - f3d_text_w(F3D_SMALL, l2)) / 2, y1, LB_CREAM, l2);
++    else
++    {
++        lcd_set_foreground(LCD_WHITE);
++        lcd_putsxy((W - 13 * 6) / 2, y1, l2);
++    }
++
++    /* a thin bar running out underneath */
++    int pw = W * 60 / 100, px = (W - pw) / 2, py = H - H * 8 / 100;
++    lb_rect(px, py, pw, 3, 0x3a3a3a);
++    lb_rect(px, py, (int)(pw * (total - t) / total), 3, LB_CREAM);
++    lcd_update();
++}
++
++/* crumble to black: blocks blink out in a scattered order */
++static void lb_crumble(void)
++{
++    const int B = LCD_WIDTH >= 300 ? 8 : 4;
++    const int cols = (LCD_WIDTH + B - 1) / B, rows = (LCD_HEIGHT + B - 1) / B;
++    const int n = cols * rows;
++    /* a full-period walk through all blocks: i -> (i * step) mod n */
++    int step = 7919 % n;
++    while (step < 2) step++;
++    for (;;)
++    {
++        int a = n, b = step;               /* make step coprime with n */
++        while (b) { int r = a % b; a = b; b = r; }
++        if (a == 1) break;
++        step++;
++    }
++    lcd_set_foreground(LCD_BLACK);
++    long t0 = current_tick, len = HZ * 7 / 10;
++    int done = 0, k = 0;
++    while (done < n)
++    {
++        long t = current_tick - t0;
++        int want = t >= len ? n : (int)((long long)n * t * t / (len * len));
++        if (want < done + 1) want = done + 1;
++        for (; done < want; done++)
++        {
++            k = (k + step) % n;
++            lcd_fillrect((k % cols) * B, (k / cols) * B, B, B);
++        }
++        lcd_update();
++        sleep(1);
++    }
++    lcd_fillrect(0, 0, LCD_WIDTH, LCD_HEIGHT);
++    lcd_update();
++}
 +#endif /* IPOD_6G || IPOD_VIDEO */
 +
-+bool asher_shutdown_countdown(void)
++bool asher_shutdown_countdown(bool low_batt)
 +{
 +#if defined(IPOD_6G) || defined(IPOD_VIDEO) || defined(IPOD_NANO3G)
 +    long start = current_tick, end = start + SECS * HZ;
@@ -4447,6 +4581,22 @@ index 0000000000..11249ef4be
 +    viewportmanager_theme_enable(SCREEN_MAIN, false, NULL);
 +    backlight_on();
 +    button_clear_queue();
++    if (low_batt)
++    {
++        /* nothing cancels this one; buttons only keep the light on */
++        asher_prefs_save();
++        while (TIME_BEFORE(current_tick, end))
++        {
++            lb_frame(current_tick - start);
++            long btn = button_get_w_tmo(HZ / 10);
++            if (btn != BUTTON_NONE && !(btn & SYS_EVENT))
++                backlight_on();
++        }
++        lb_frame(SECS * HZ);
++        sleep(HZ / 4);
++        lb_crumble();
++        return true;
++    }
 +    while (TIME_BEFORE(current_tick, end))
 +    {
 +        frame(current_tick - start);
@@ -4472,6 +4622,7 @@ index 0000000000..11249ef4be
 +    aui_dirty = true;
 +    return false;
 +#else
++    (void)low_batt;
 +    return true;
 +#endif
 +}
@@ -4486,14 +4637,15 @@ index 0000000000..11249ef4be
 +}
 diff --git a/apps/asher/asher_power.h b/apps/asher/asher_power.h
 new file mode 100644
-index 0000000000..a22315f7c8
+index 0000000000..1599b35384
 --- /dev/null
 +++ b/apps/asher/asher_power.h
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,7 @@
 +#ifndef ASHER_POWER_H
 +#define ASHER_POWER_H
 +#include <stdbool.h>
-+bool asher_shutdown_countdown(void);   /* false = the user cancelled */
++/* false = the user cancelled; low_batt: the 1% screen (can't be cancelled) */
++bool asher_shutdown_countdown(bool low_batt);
 +void asher_shutdown_aborted(void);     /* undo after a later cancel */
 +#endif
 diff --git a/apps/asher/asher_prefs.c b/apps/asher/asher_prefs.c
@@ -5026,7 +5178,7 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..6e1b9b8fe0
+index 0000000000..fc5fbbfa6c
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,589 @@
@@ -5054,7 +5206,7 @@ index 0000000000..6e1b9b8fe0
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.5.5"
++#define ASHER_OS_VERSION "2.5.6"
 +#if defined(IPOD_VIDEO) && defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
 +#define MODEL_LABEL "iPod Video (5.5 gen)"
 +#elif defined(IPOD_VIDEO)
@@ -12628,7 +12780,7 @@ index 61d16f4cb1..6f41f4bf04 100644
 +          ,&asher_sound_reset_item
           );
 diff --git a/apps/misc.c b/apps/misc.c
-index 983fbc92f3..634be39f2a 100644
+index 983fbc92f3..c6e5b55f3f 100644
 --- a/apps/misc.c
 +++ b/apps/misc.c
 @@ -25,6 +25,7 @@
@@ -12639,15 +12791,19 @@ index 983fbc92f3..634be39f2a 100644
  #include "system.h"
  #include "lcd.h"
  #include "language.h" /* is_lang_rtl() */
-@@ -374,12 +375,15 @@ static bool clean_shutdown(enum shutdown_type sd_type,
+@@ -374,12 +375,19 @@ static bool clean_shutdown(enum shutdown_type sd_type,
          int audio_stat = audio_status();
  #endif
  
 -        FOR_NB_SCREENS(i)
 -            viewportmanager_theme_enable(i, true, NULL);
 -        clear_screen_buffer(false);
-+        /* Asher OS: retro pop-up that counts down (Menu cancels) */
-+        if (!asher_shutdown_countdown())
++        /* Asher OS: retro pop-up that counts down (Menu cancels). When the
++         * battery is at 1% (or flat) it's the low-battery screen instead,
++         * which can't be cancelled */
++        extern volatile bool asher_lowbatt_off;
++        bool low_batt = asher_lowbatt_off || !batt_safe;
++        if (!asher_shutdown_countdown(low_batt))
 +        {
 +            cancel_shutdown();
 +            return false;
@@ -12659,7 +12815,14 @@ index 983fbc92f3..634be39f2a 100644
              screens[i].scroll_stop();
          }
  
-@@ -393,14 +397,14 @@ static bool clean_shutdown(enum shutdown_type sd_type,
+@@ -387,20 +395,20 @@ static bool clean_shutdown(enum shutdown_type sd_type,
+         {
+             int level;
+ #ifdef HAVE_TAGCACHE
+-            if (!tagcache_prepare_shutdown())
++            if (!tagcache_prepare_shutdown() && !low_batt)
+             {
+                 cancel_shutdown();
                  splash(HZ, ID2P(LANG_TAGCACHE_BUSY));
                  FOR_NB_SCREENS(i)
                      viewportmanager_theme_undo(i, false);
@@ -12668,7 +12831,8 @@ index 983fbc92f3..634be39f2a 100644
              }
  #endif
              level = battery_level();
-             if (level > 10 || level < 0)
+-            if (level > 10 || level < 0)
++            if (level > 10 || level < 0 || low_batt)
              {
 -                if (global_settings.show_shutdown_message)
 -                    splash(0, str(LANG_SHUTTINGDOWN));
@@ -12676,7 +12840,17 @@ index 983fbc92f3..634be39f2a 100644
              }
              else
              {
-@@ -665,6 +669,7 @@ long default_event_handler_ex(long event, void (*callback)(void *), void *parame
+@@ -412,8 +420,7 @@ static bool clean_shutdown(enum shutdown_type sd_type,
+         else
+         {
+             msg_id = LANG_WARNING_BATTERY_EMPTY;
+-            splashf(0, "%s %s", str(LANG_WARNING_BATTERY_EMPTY),
+-                                str(LANG_SHUTTINGDOWN));
++            /* (the low-battery screen already said so) */
+         }
+ 
+ #ifdef HAVE_DISK_STORAGE
+@@ -665,6 +672,7 @@ long default_event_handler_ex(long event, void (*callback)(void *), void *parame
          case SYS_USB_CONNECTED:
          {
              intptr_t seqnum = button_get_data();
@@ -12684,7 +12858,7 @@ index 983fbc92f3..634be39f2a 100644
              if (callback != NULL)
                  callback(parameter);
              system_flush();
-@@ -1081,6 +1086,8 @@ void keyclick_set_callback(keyclick_callback cb, void* data)
+@@ -1081,6 +1089,8 @@ void keyclick_set_callback(keyclick_callback cb, void* data)
  }
  
  /* Produce keyclick based upon button and global settings */
@@ -12693,7 +12867,7 @@ index 983fbc92f3..634be39f2a 100644
  void keyclick_click(bool rawbutton, int action)
  {
      int button = action;
-@@ -1119,6 +1126,10 @@ void keyclick_click(bool rawbutton, int action)
+@@ -1119,6 +1129,10 @@ void keyclick_click(bool rawbutton, int action)
          }
  #endif
      }
@@ -13760,6 +13934,60 @@ index de48c890f9..6448e815bd 100644
  /* check whether USB is plugged, note that this is the raw hardware value */
  int usb_detect(void);
  #ifdef USB_STATUS_BY_EVENT
+diff --git a/firmware/powermgmt.c b/firmware/powermgmt.c
+index e89c0ce034..aacc69659f 100644
+--- a/firmware/powermgmt.c
++++ b/firmware/powermgmt.c
+@@ -718,6 +718,11 @@ static void collect_power_history(void)
+  * Monitor the presence of a charger and perform critical frequent steps
+  * such as running the battery voltage filter.
+  */
++/* Asher OS 2.5.6: set when the battery reached 1% and the iPod is shutting
++ * itself down (the shutdown screen then says "low battery" and can't be
++ * cancelled) */
++volatile bool asher_lowbatt_off = false;
++
+ static inline void power_thread_step(void)
+ {
+     /* If the power off timeout expires, the main thread has failed
+@@ -756,9 +761,29 @@ static inline void power_thread_step(void)
+          * using NiMH or Alkaline batteries.
+          */
+         if (!shutdown_timeout && query_force_shutdown()) {
++            asher_lowbatt_off = true;
+             sys_poweroff();
+         }
+     }
++
++#if !defined(BOOTLOADER) && CONFIG_CHARGING
++    /* Asher OS: shut down cleanly as soon as the battery reads 1% (held
++     * for a few seconds, so a short dip while the drive spins up doesn't
++     * count), instead of waiting for it to run completely flat */
++    static int low_steps;
++    if (!shutdown_timeout && !power_input_present()
++        && current_tick > 60 * HZ && percent_now >= 0 && percent_now <= 1)
++    {
++        if (++low_steps >= (4 * HZ) / POWER_THREAD_STEP_TICKS)
++        {
++            low_steps = 0;
++            asher_lowbatt_off = true;
++            sys_poweroff();
++        }
++    }
++    else
++        low_steps = 0;
++#endif
+ } /* power_thread_step */
+ 
+ static void power_thread(void)
+@@ -1234,6 +1259,7 @@ void handle_auto_poweroff(void)
+ 
+     if (!shutdown_timeout && query_force_shutdown()) {
+         backlight_on();
++        asher_lowbatt_off = true;
+         sys_poweroff();
+     }
+ 
 diff --git a/firmware/target/arm/ata-nand-telechips.c b/firmware/target/arm/ata-nand-telechips.c
 index c7954e3188..e59255a3b4 100644
 --- a/firmware/target/arm/ata-nand-telechips.c
