@@ -1764,10 +1764,10 @@ index 0000000000..602c7f6ed6
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000000..dc53301d65
+index 0000000000..36c9cfbfc3
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,2047 @@
+@@ -0,0 +1,2059 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -2336,17 +2336,29 @@ index 0000000000..dc53301d65
 +    if (!tagcache_is_usable())
 +    {
 +        struct tagcache_stat *st = tagcache_get_stat();
-+        if (!st->ready && st->commit_step == 0 && !rebuild_requested)
-+        {
-+            rebuild_requested = true;
-+            tagcache_rebuild();
-+        }
 +        aui_begin();
 +        while (!tagcache_is_usable())
 +        {
 +            char msg[64];
 +            st = tagcache_get_stat();
-+            if (st->commit_delayed)
++            /* 2.5.5: right after start-up the database is still being
++             * opened (a hard drive takes a few seconds to spin up). That
++             * used to look like "no database" and wiped and rebuilt the
++             * whole library every time, and saving the rebuilt library
++             * then stopped the music. Now it waits for the check, and only
++             * builds a library when there really isn't one */
++            bool checked = st->initialized && (st->ready || st->readyvalid);
++            if (checked && !st->ready && st->commit_step == 0
++                && !st->commit_delayed && !rebuild_requested)
++            {
++                rebuild_requested = true;
++                tagcache_rebuild();
++            }
++            if (!checked)
++                snprintf(msg, sizeof(msg), "Opening your library...");
++            else if (st->commit_delayed && audio_status() != 0)
++                snprintf(msg, sizeof(msg), "Finishes when the music stops");
++            else if (st->commit_delayed)
 +                snprintf(msg, sizeof(msg), "Restart your iPod to finish");
 +            else if (st->commit_step > 0)
 +                snprintf(msg, sizeof(msg), "Finishing up... step %d", st->commit_step);
@@ -5014,7 +5026,7 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..ee71ee5838
+index 0000000000..6e1b9b8fe0
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,589 @@
@@ -5042,7 +5054,7 @@ index 0000000000..ee71ee5838
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.5.4"
++#define ASHER_OS_VERSION "2.5.5"
 +#if defined(IPOD_VIDEO) && defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
 +#define MODEL_LABEL "iPod Video (5.5 gen)"
 +#elif defined(IPOD_VIDEO)
@@ -13096,10 +13108,68 @@ index 918669b245..2a828d63ec 100644
                  ignore_back_button_stub(false);
  
 diff --git a/apps/tagcache.c b/apps/tagcache.c
-index 4ad028869e..23a2b7e416 100644
+index 4ad028869e..2da0324caa 100644
 --- a/apps/tagcache.c
 +++ b/apps/tagcache.c
-@@ -790,6 +790,16 @@ static void allocate_tempbuf(void)
+@@ -95,6 +95,18 @@
+ #else/*!defined(PLUGIN)*/
+ #define USR_CANCEL (tc_stat.commit_delayed == true)
+ #endif /*!defined(PLUGIN)*/
++#if !defined(__PCTOOL__) && !defined(PLUGIN)
++#include "audio.h"
++#include "asher/asher_mem.h"
++/* Asher OS 2.5.5: is music loaded (playing or paused)? Then the database
++ * must never take memory from the music: grabbing "everything" makes the
++ * player give up and the song just stops (seen 15-20 s into a song on the
++ * 32 MB iPod Videos, right when a library update finished) */
++#define ASHER_MUSIC_ON() (audio_status() != 0)
++#else
++#define ASHER_MUSIC_ON() false
++#endif
++
+ /*
+  * Define this to support non-native endian tagcache files.
+  * Databases are always written in native endian so this is
+@@ -193,6 +205,7 @@ static long tempbuf_left; /* Buffer space left. */
+ static long tempbuf_pos;
+ #ifndef __PCTOOL__
+ static int tempbuf_handle;
++static bool tempbuf_gentle;   /* taken from Asher OS's reserve, not the music */
+ #endif
+ 
+ #define SORTED_TAGS_COUNT 9
+@@ -784,12 +797,47 @@ static void allocate_tempbuf(void)
+     if (tempbuf)
+         tempbuf_size = size;
+ #else /* !__PCTOOL__ */
++    tempbuf_gentle = false;
++#if !defined(PLUGIN)
++    if (ASHER_MUSIC_ON())
++    {
++        /* music is loaded: only use memory nobody is using (Asher OS's
++         * reserve plus any free gap), never the music buffer */
++        asher_mem_lend();
++        size = core_allocatable();
++        const size_t slack = 512 * 1024;
++        if (size > slack + 1024 * 1024)
++        {
++            size = (size - slack) & ~(size_t)3;
++            tempbuf_handle = core_alloc_ex(size, &buflib_ops_locked);
++            if (tempbuf_handle > 0)
++            {
++                tempbuf = core_get_data(tempbuf_handle);
++                tempbuf_size = size;
++                tempbuf_gentle = true;
++                return;
++            }
++        }
++        asher_mem_back();
++        return;    /* too little: the commit waits for the music to stop */
++    }
++#endif
+     /* Need to pass dummy ops to prevent the buffer being moved
+      * out from under us, since we yield during the tagcache commit. */
+     tempbuf_handle = core_alloc_maximum(&size, &buflib_ops_locked);
      if (tempbuf_handle > 0)
      {
          tempbuf = core_get_data(tempbuf_handle);
@@ -13116,7 +13186,119 @@ index 4ad028869e..23a2b7e416 100644
          tempbuf_size = size;
      }
  #endif /* __PCTOOL__ */
-@@ -5250,14 +5260,10 @@ static void tagcache_thread(void)
+@@ -808,6 +856,10 @@ static void free_tempbuf(void)
+ #endif
+     tempbuf = NULL;
+     tempbuf_size = 0;
++#if !defined(__PCTOOL__) && !defined(PLUGIN)
++    if (tempbuf_gentle) asher_mem_back();
++    tempbuf_gentle = false;
++#endif
+ }
+ 
+ #if defined(HAVE_TC_RAMCACHE) && defined(HAVE_DIRCACHE)
+@@ -3415,7 +3467,20 @@ static bool commit(void)
+     }
+ 
+     if (tch.entry_count == 0)
++    {
+         logf("nothing to commit");
++        /* Asher OS 2.5.5: the automatic library check after start-up found
++         * no new songs. There's nothing to save, so don't take any memory
++         * (that grab is what stopped the music a few seconds in) */
++        if (check_all_headers())
++        {
++            close(tmpfd);
++            remove_db_file(TAGCACHE_FILE_TEMP);
++            tc_stat.ready = true;
++            tc_stat.commit_delayed = false;
++            return true;
++        }
++    }
+ 
+     /* Fully initialize existing headers (if any) before going further. */
+     tc_stat.ready = check_all_headers();
+@@ -3433,9 +3498,16 @@ static bool commit(void)
+     rc = false;
+     read_lock++;
+ 
++    /* Asher OS: with music loaded, first try spare memory only */
++    if (tempbuf_size == 0 && ASHER_MUSIC_ON())
++        allocate_tempbuf();
++    bool asher_own_buf = tempbuf_gentle;
++
+     /* Try to steal every buffer we can :) */
+ #ifdef HAVE_DIRCACHE
+-    if (tempbuf_size == 0)
++    /* (not with music on: giving the dircache back afterwards would take
++     * memory from the music) */
++    if (tempbuf_size == 0 && !ASHER_MUSIC_ON())
+     {
+         /* Suspend dircache to free its allocation. */
+         dircache_free_buffer();
+@@ -3558,6 +3630,8 @@ static bool commit(void)
+     } /*!USR_CANCEL*/
+ 
+ commit_error:
++    if (asher_own_buf)
++        free_tempbuf();
+ #ifdef HAVE_TC_RAMCACHE
+     if (ramcache_buffer_stolen)
+     {
+@@ -5005,6 +5079,43 @@ void tagcache_screensync_enable(bool state)
+     tc_stat.syncscreen = state;
+ }
+ 
++/* Asher OS 2.5.5: commit, and if it had to wait because music is loaded
++ * and there wasn't enough spare memory, finish it once the music stops
++ * (instead of stopping the music to make room) */
++static bool commit_safe(void)
++{
++    bool ok = commit();
++#if !defined(__PCTOOL__) && !defined(PLUGIN)
++    while (!ok && tc_stat.commit_delayed)
++    {
++        int fd = open_db_fd(TAGCACHE_FILE_TEMP, O_RDONLY);
++        if (fd < 0) break;
++        close(fd);
++        fd = open_db_fd(TAGCACHE_FILE_NOCOMMIT, O_RDONLY);
++        if (fd >= 0) { close(fd); break; }
++        if (!ASHER_MUSIC_ON())
++        {
++            ok = commit();
++            break;
++        }
++        sleep(HZ);
++        struct queue_event ev;
++        if (queue_peek(&tagcache_queue, &ev))
++        {
++            if (ev.id == SYS_USB_CONNECTED)
++            {
++                queue_wait(&tagcache_queue, &ev);
++                usb_acknowledge(SYS_USB_CONNECTED_ACK, ev.data);
++                usb_wait_for_disconnect(&tagcache_queue);
++            }
++            else if (ev.id == SYS_POWEROFF || ev.id == SYS_REBOOT)
++                break;     /* finished at the next start-up */
++        }
++    }
++#endif
++    return ok;
++}
++
+ #ifndef __PCTOOL__
+ /* this is called by the database tool to not pull in global_settings */
+ static
+@@ -5160,7 +5271,7 @@ commit:
+ #ifdef __PCTOOL__
+     allocate_tempbuf();
+ #endif
+-    if (commit())
++    if (commit_safe())
+     {
+         logf("tagcache built!");
+     }
+@@ -5250,17 +5361,13 @@ static void tagcache_thread(void)
       * the changes first in foreground. */
      if (db_file_exists(TAGCACHE_FILE_TEMP))
      {
@@ -13134,7 +13316,22 @@ index 4ad028869e..23a2b7e416 100644
 +         * interrupted update is simply finished */
          {
              allocate_tempbuf();
-             commit();
+-            commit();
++            commit_safe();
+             free_tempbuf();
+         }
+     }
+@@ -5331,7 +5438,9 @@ static void tagcache_thread(void)
+                     if (global_settings.tagcache_ram == TAGCACHE_RAM_ON)
+                         check_deleted_file_refs(global_settings.tagcache_autoupdate);
+                     if (tc_stat.ramcache && global_settings.tagcache_autoupdate)
+-                        tagcache_build();
++                    {
++                            tagcache_build();
++                    }
+                 }
+                 else
+ #endif /* HAVE_RC_RAMCACHE */
 diff --git a/firmware/backlight.c b/firmware/backlight.c
 index 781434e07b..a6b02061ac 100644
 --- a/firmware/backlight.c
