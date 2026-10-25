@@ -583,10 +583,10 @@ index 0000000..541fe54
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
 new file mode 100644
-index 0000000..d77d8e6
+index 0000000..e80a3d1
 --- /dev/null
 +++ b/apps/asher/asher_home.c
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,312 @@
 +/* Asher OS home screen.
 + *  Bubbles / Dark: four glossy bubbles in an even 2x2 grid over the live
 + *  wallpaper. Turning right moves right, then wraps down to the first box
@@ -837,6 +837,10 @@ index 0000000..d77d8e6
 +        if (!once && getenv("ASHER_SS")) { once = true; aui_end(); asher_scroll_speed_screen(); aui_begin(); }
 +    }
 +#endif
++    {
++        static bool checked;
++        if (!checked) { checked = true; asher_library_check_flag(); }
++    }
 +    while (1)
 +    {
 +        asher_wheel_zone(WZ_MAIN);
@@ -1771,10 +1775,10 @@ index 0000000..602c7f6
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000..0efe0a0
+index 0000000..c7e8d39
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,2363 @@
+@@ -0,0 +1,2389 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -1814,6 +1818,7 @@ index 0000000..0efe0a0
 +#include "asher_ui.h"
 +#include "asher_list.h"
 +#include "asher_music.h"
++#include "asher_font3d.h"
 +
 +/* ------------------------------------------------------------------ */
 +/* library index                                                       */
@@ -2642,6 +2647,17 @@ index 0000000..0efe0a0
 +    struct songs *s = l->data;
 +    return song_menu_lib(s->order[i]);
 +}
++/* 2.5.9: the "Song Lists" scroll speed is only for lists of your music
++ * (songs, artists, a playlist's songs, the queue); the Music menu itself
++ * and the lists of playlists use "Everything Else" */
++static int music_list_run(struct aui_list *l, int zone)
++{
++    int z = asher_wheel_zone_get();
++    asher_wheel_zone(zone);
++    int r = aui_list_run(l);
++    asher_wheel_zone(z);
++    return r;
++}
 +static int songs_list(const char *title, const int *order, int count)
 +{
 +    struct songs s = { order, count, true };
@@ -2650,7 +2666,7 @@ index 0000000..0efe0a0
 +    l.letter_jump = asher_organize == ORG_ALPHA;
 +    l.get = songs_get; l.select = songs_select; l.data = &s; l.style = songs_style;
 +    l.hold = songs_hold;
-+    return aui_list_run(&l);
++    return music_list_run(&l, WZ_MUSIC);
 +}
 +
 +/* ------------------------------------------------------------------ */
@@ -2673,7 +2689,7 @@ index 0000000..0efe0a0
 +    struct aui_list l = { 0 };
 +    l.title = "Artists"; l.count = lib_nart; l.two_line = true; l.chevrons = true;
 +    l.letter_jump = true; l.get = artist_get; l.select = artist_select;
-+    return aui_list_run(&l);
++    return music_list_run(&l, WZ_MUSIC);
 +}
 +
 +/* ------------------------------------------------------------------ */
@@ -3060,9 +3076,10 @@ index 0000000..0efe0a0
 +/* search keeps the default wheel speed, whatever Music is set to */
 +static int search(void)
 +{
++    int z = asher_wheel_zone_get();
 +    asher_wheel_zone(WZ_SEARCH);
 +    int r = search_inner();
-+    asher_wheel_zone(WZ_MUSIC);
++    asher_wheel_zone(z);
 +    return r;
 +}
 +
@@ -3601,7 +3618,7 @@ index 0000000..0efe0a0
 +            for (int k = 0; k < fs_n; k++)
 +                if (is_now_playing(FS(k))) { sl.sel = k + FS_TOP; break; }
 +        open_pl = i;
-+        r = aui_list_run(&sl);
++        r = music_list_run(&sl, WZ_MUSIC);
 +        open_pl = -1;
 +    }
 +    aui_end();
@@ -3851,7 +3868,7 @@ index 0000000..0efe0a0
 +    l.title = "Add to Playlist"; l.count = pk_n + 1; l.two_line = true;
 +    l.get = pk_get; l.select = pk_select; l.style = pk_style;
 +    l.sel = pk_n ? 1 : 0;
-+    aui_list_run(&l);
++    music_list_run(&l, WZ_OTHER);
 +    aui_end();
 +    pk_song = NULL;
 +}
@@ -4028,7 +4045,7 @@ index 0000000..0efe0a0
 +    struct aui_list l = { 0 };
 +    l.title = "Queue"; l.count = q_n; l.two_line = true;
 +    l.get = queue_get; l.select = queue_select; l.style = queue_style; l.hold = queue_hold;
-+    return aui_list_run(&l);
++    return music_list_run(&l, WZ_MUSIC);
 +}
 +
 +/* Music > Organize: how song lists are sorted */
@@ -4115,7 +4132,7 @@ index 0000000..0efe0a0
 +{
 +    static int sel = 0;
 +    struct aui_list l = { 0 };
-+    asher_wheel_zone(WZ_MUSIC);
++    asher_wheel_zone(WZ_OTHER);       /* the Music menu: Everything Else speed */
 +    aui_begin();            /* held across the intro so nothing flashes between */
 +    music_intro();
 +    l.title = "Music"; l.count = 7; l.chevrons = true;
@@ -4124,6 +4141,19 @@ index 0000000..0efe0a0
 +    aui_end();
 +    sel = l.sel;
 +    return r;
++}
++
++/* 2.5.9: "Add Songs" on the computer leaves this file behind; at start-up
++ * the iPod then adds the new songs to the library by itself */
++#define UPDATE_FLAG "/.rockbox/asher/update_library"
++void asher_library_check_flag(void)
++{
++    if (!file_exists(UPDATE_FLAG)) return;
++    remove(UPDATE_FLAG);
++    lib_free();
++    remove(LIB_CACHE);
++    tagcache_update();
++    asher_toast("Adding your new songs...", 3 * HZ, false);
 +}
 +
 +/* Settings > Music Library: rebuild the database from scratch */
@@ -4140,10 +4170,10 @@ index 0000000..0efe0a0
 +                  library_rebuild, NULL, Icon_NOICON);
 diff --git a/apps/asher/asher_music.h b/apps/asher/asher_music.h
 new file mode 100644
-index 0000000..781a121
+index 0000000..5835081
 --- /dev/null
 +++ b/apps/asher/asher_music.h
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,18 @@
 +#ifndef ASHER_MUSIC_H
 +#define ASHER_MUSIC_H
 +#include <stdbool.h>
@@ -4160,6 +4190,7 @@ index 0000000..781a121
 +extern bool asher_np_skip_intro;               /* music just loaded: no NP intro */
 +extern const struct menu_item_ex asher_library_item;   /* Settings entry */
 +extern const struct menu_item_ex asher_shuffle_item;   /* Settings entry */
++void asher_library_check_flag(void);   /* new songs from Add Songs: update the library */
 +#endif
 diff --git a/apps/asher/asher_nowplaying.c b/apps/asher/asher_nowplaying.c
 new file mode 100644
@@ -5494,7 +5525,7 @@ index 0000000..b0dca4f
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000..fae66f5
+index 0000000..70b0d05
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,589 @@
@@ -5522,7 +5553,7 @@ index 0000000..fae66f5
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.5.8"
++#define ASHER_OS_VERSION "2.5.9"
 +#if defined(IPOD_VIDEO) && defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
 +#define MODEL_LABEL "iPod Video (5.5 gen)"
 +#elif defined(IPOD_VIDEO)
@@ -5750,7 +5781,7 @@ index 0000000..fae66f5
 +#define SS_AREAS 3
 +static const char *ss_words[12] = { "Blue", "Night", "Drive", "Summer", "Neon", "Ocean",
 +                                    "Golden", "Midnight", "City", "Rain", "Velvet", "Echo" };
-+static const char *ss_area[SS_AREAS] = { "Main Menu", "Music Menu", "Everything Else" };
++static const char *ss_area[SS_AREAS] = { "Main Menu", "Song Lists", "Everything Else" };
 +
 +static void ss_draw(const int *vals, int area, bool editing, int sel, int top,
 +                    int rate, int peak)
