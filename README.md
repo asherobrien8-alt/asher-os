@@ -3,7 +3,7 @@
 A custom operating system for iPods, built on [Rockbox](https://www.rockbox.org/).
 It dual boots with Apple's own software, so the iPod can always go back to it.
 
-Current version: **2.5.7**
+Current version: **2.5.8**
 
 ## Supported iPods
 
@@ -42,6 +42,16 @@ make -j"$(nproc)" && make zip
 
 Copy the whole `.rockbox` folder from the install zip to the top level of the
 iPod (show hidden files first), replace everything, eject, then reboot.
+
+Finished builds are also put on the `builds` branch, named with the version
+and the iPod they're for (e.g. `AsherOS_2.5.8_iPod_Video_5.5_gen.zip`).
+
+## Adding music
+
+1. Copy songs into `Music\Artist\Album\` on the iPod (one copy of each song).
+2. On the iPod: Settings > Rebuild Music Library (keep it on the charger until it's done).
+3. To put a song in playlists: hold Play on it > Add to Playlist, then pick
+   playlists or make a New Playlist.
 
 Asher OS is based on Rockbox and is released under the GNU GPL, version 2 or
 later, the same as Rockbox.

@@ -583,10 +583,10 @@ index 0000000..541fe54
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
 new file mode 100644
-index 0000000..2707cfc
+index 0000000..d77d8e6
 --- /dev/null
 +++ b/apps/asher/asher_home.c
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,308 @@
 +/* Asher OS home screen.
 + *  Bubbles / Dark: four glossy bubbles in an even 2x2 grid over the live
 + *  wallpaper. Turning right moves right, then wraps down to the first box
@@ -876,8 +876,9 @@ index 0000000..2707cfc
 +                redraw = true;
 +                break;
 +            }
-+            case ACTION_STD_QUICKSCREEN:          /* hold Menu: shuffle / repeat */
-+                asher_shuffle_menu();
++            case ACTION_STD_QUICKSCREEN:          /* hold Menu: music controls (2.5.8) */
++                action_wait_for_release();
++                asher_music_mode();
 +                redraw = true;
 +                break;
 +            case ACTION_STD_CANCEL:
@@ -908,10 +909,10 @@ index 0000000..0f36b5c
 +#endif
 diff --git a/apps/asher/asher_list.c b/apps/asher/asher_list.c
 new file mode 100644
-index 0000000..b11d2f6
+index 0000000..d396c34
 --- /dev/null
 +++ b/apps/asher/asher_list.c
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,310 @@
 +/* Asher OS list screen: thick rounded selection bar, top bar with the
 + * clock, and accelerated scrolling with a first-letter bubble. */
 +#include <stdio.h>
@@ -1181,8 +1182,9 @@ index 0000000..b11d2f6
 +            case ACTION_STD_MENU:
 +                aui_end();
 +                return 0;
-+            case ACTION_STD_QUICKSCREEN:      /* hold Menu: shuffle / repeat */
-+                asher_shuffle_menu();
++            case ACTION_STD_QUICKSCREEN:      /* hold Menu: music controls (2.5.8) */
++                action_wait_for_release();
++                asher_music_mode();
 +                redraw = true;
 +                break;
 +            case ACTION_STD_HOTKEY:           /* hold Play: the song menu */
@@ -1769,10 +1771,10 @@ index 0000000..602c7f6
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000..a9b3522
+index 0000000..0efe0a0
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,2113 @@
+@@ -0,0 +1,2363 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -2570,19 +2572,28 @@ index 0000000..a9b3522
 +    else splashf(HZ, "Queue cleared (%d)", k);
 +}
 +
-+/* the menu itself; name is shown under the title */
-+static int song_menu(const char *path, const char *name)
++static void add_to_playlist(const char *path, const char *name);   /* below */
++
++/* the menu itself; name is shown under the title. no_queue: the song is
++ * the one playing (it can go in a playlist, not in the queue) */
++static int song_menu_ex(const char *path, const char *name, bool no_queue)
 +{
-+    const char *items[2];
-+    int act[2], n = 0;
-+    if (path) { items[n] = "Add to Queue"; act[n++] = 1; }
++    const char *items[3];
++    int act[3], n = 0;
++    if (path && !no_queue) { items[n] = "Add to Queue"; act[n++] = 1; }
++    if (path) { items[n] = "Add to Playlist"; act[n++] = 3; }
 +    if (playlist_queued_ahead() > 0) { items[n] = "Cancel Queue"; act[n++] = 2; }
 +    if (n == 0) return 0;
 +    int r = asher_popup("SONG", name ? name : "", items, n);
 +    if (r < 0) return 0;
 +    if (act[r] == 1) queue_add(path);
++    else if (act[r] == 3) add_to_playlist(path, name);
 +    else queue_cancel();
 +    return 0;
++}
++static int song_menu(const char *path, const char *name)
++{
++    return song_menu_ex(path, name, false);
 +}
 +static int song_menu_lib(int e)
 +{
@@ -2734,6 +2745,9 @@ index 0000000..a9b3522
 +#define KB_RIGHT ACTION_STD_CONTEXT
 +#define KB_UP    ACTION_STD_MENU
 +#define KB_DOWN  ACTION_STD_REC
++/* 2.5.8: hold << for about a second deletes one letter (one per hold) */
++#define KB_DELHOLD ACTION_TREE_PGLEFT
++#define KB_DELREL  ACTION_TREE_PGRIGHT
 +static const struct button_mapping kb_map[] = {
 +    /* the wheel does nothing while the keyboard is open */
 +    { ACTION_NONE,           BUTTON_SCROLL_FWD,                BUTTON_NONE },
@@ -2746,7 +2760,8 @@ index 0000000..a9b3522
 +    { KB_DOWN,               BUTTON_PLAY|BUTTON_REL,           BUTTON_PLAY },
 +    { ACT_KEYBOARD,          BUTTON_PLAY|BUTTON_REPEAT,        BUTTON_PLAY },
 +    { KB_LEFT,               BUTTON_LEFT|BUTTON_REL,           BUTTON_LEFT },
-+    { KB_LEFT,               BUTTON_LEFT|BUTTON_REPEAT,        BUTTON_NONE },
++    { KB_DELHOLD,            BUTTON_LEFT|BUTTON_REPEAT,        BUTTON_NONE },
++    { KB_DELREL,             BUTTON_LEFT|BUTTON_REL,           BUTTON_LEFT|BUTTON_REPEAT },
 +    { KB_RIGHT,              BUTTON_RIGHT|BUTTON_REL,          BUTTON_RIGHT },
 +    { KB_RIGHT,              BUTTON_RIGHT|BUTTON_REPEAT,       BUTTON_NONE },
 +    LAST_ITEM_IN_LIST
@@ -2760,7 +2775,13 @@ index 0000000..a9b3522
 +#define KB_RIGHT ACTION_STD_CONTEXT
 +#define KB_UP    ACTION_STD_MENU
 +#define KB_DOWN  ACTION_STD_REC
++#define KB_DELHOLD ACTION_TREE_PGLEFT
++#define KB_DELREL  ACTION_TREE_PGRIGHT
 +#endif
++
++/* the keyboard is also used to name a new playlist (2.5.8): then it shows
++ * this prompt instead of search results, and types Capitalised Words */
++static const char *kb_naming;
 +
 +static void draw_search(const char *q, int letter, bool in_results, int rsel, int rtop)
 +{
@@ -2889,21 +2910,28 @@ index 0000000..a9b3522
 +        }
 +    aui_present();
 +    snprintf(buf, sizeof(buf), "%s_", q);
++    if (kb_naming)
++    {
++        aui_text(AF_MED, 18, AUI_BAR + 9, q[0] ? t->text : t->sub, q[0] ? buf : kb_naming, AUI_W - 36, 0);
++        aui_text(AF_SMALLR, AUI_W / 2, AUI_BAR + 38, t->sub, "Enter saves it  -  hold Play cancels", AUI_W - 20, 1);
++        aui_text(AF_SMALLR, AUI_W / 2, AUI_BAR + 54, t->sub, "Hold << to delete a letter", AUI_W - 20, 1);
++    }
++    else
 +    aui_text(AF_MED, 18, AUI_BAR + 9, q[0] ? t->text : t->sub, q[0] ? buf : "Type to search", AUI_W - 110, 0);
-+    if (q[0])
++    if (q[0] && !kb_naming)
 +    {
 +        snprintf(buf, sizeof(buf), lib_res == 1 ? "%d song" : "%d songs", lib_res);
 +        aui_text(AF_SMALLR, AUI_W - 18, AUI_BAR + 11, t->sub, buf, 90, 2);
 +    }
 +    /* the first results, as you type */
-+    for (int k = 0; k < 2 && k < lib_res; k++)
++    for (int k = 0; !kb_naming && k < 2 && k < lib_res; k++)
 +    {
 +        int e = results[k];
 +        snprintf(buf, sizeof(buf), "%s", T(e));
 +        aui_text(AF_SMALL, 14, AUI_BAR + 36 + k * 18, t->text, buf, 170, 0);
 +        aui_text(AF_SMALLR, AUI_W - 14, AUI_BAR + 36 + k * 18, t->sub, AR(e), 120, 2);
 +    }
-+    if (q[0] && lib_res == 0)
++    if (q[0] && lib_res == 0 && !kb_naming)
 +        aui_text(AF_SMALLR, AUI_W / 2, AUI_BAR + 44, t->sub, "No matches", AUI_W - 20, 1);
 +    for (int r = 0; r < KB_ROWS; r++)
 +        for (int c = 0; c < kb_len(r); c++)
@@ -2918,7 +2946,7 @@ index 0000000..a9b3522
 +            aui_text(font, x + w / 2, KB_Y + r * KB_RH + (KB_RH - 3 - aui_font_h(font)) / 2,
 +                     col, label, w, 1);
 +        }
-+    aui_topbar_text("Keyboard");
++    aui_topbar_text(kb_naming ? "New Playlist" : "Keyboard");
 +    aui_update();
 +}
 +
@@ -2953,11 +2981,13 @@ index 0000000..a9b3522
 +{
 +    static int kr = 1, kc = 0;
 +    bool redraw = true;
++    long hold_from = 0;          /* when << started being held */
++    bool hold_done = false;      /* this hold already deleted its letter */
 +    while (1)
 +    {
 +        if (aui_woke()) redraw = true;
 +        if (redraw) { kb_draw(q, kr, kc); redraw = false; }
-+        int a = kb_action(HZ);
++        int a = kb_action(hold_from ? HZ / 10 : HZ);
 +        size_t len = strlen(q);
 +        switch (a)
 +        {
@@ -2968,7 +2998,24 @@ index 0000000..a9b3522
 +                if (--kc < 0) { kr = (kr + KB_ROWS - 1) % KB_ROWS; kc = kb_len(kr) - 1; }
 +                redraw = true; break;
 +            case KB_LEFT:
++                hold_from = 0; hold_done = false;
 +                kc = (kc + kb_len(kr) - 1) % kb_len(kr); redraw = true; break;
++            case KB_DELHOLD:             /* << held: one letter goes after ~1s */
++                if (!hold_from) hold_from = current_tick;
++                if (!hold_done && TIME_AFTER(current_tick, hold_from + HZ * 2 / 3))
++                {
++                    hold_done = true;
++                    if (len)
++                    {
++                        q[len - 1] = 0;
++                        if (!kb_naming) run_search(q);
++                        redraw = true;
++                    }
++                }
++                break;
++            case KB_DELREL:              /* let go: the next hold deletes again */
++                hold_from = 0; hold_done = false;
++                break;
 +            case KB_RIGHT:
 +                kc = (kc + 1) % kb_len(kr); redraw = true; break;
 +            case KB_UP:
@@ -2985,10 +3032,12 @@ index 0000000..a9b3522
 +                else if (ch == ' ') { if (len && len < qn - 1 && q[len - 1] != ' ') { q[len] = ' '; q[len + 1] = 0; } }
 +                else if (len < qn - 1)
 +                {
-+                    q[len] = (ch >= 'A' && ch <= 'Z') ? ch - 'A' + 'a' : ch;
++                    /* names: capital at the start of each word */
++                    bool cap = kb_naming && (!len || q[len - 1] == ' ');
++                    q[len] = (ch >= 'A' && ch <= 'Z' && !cap) ? ch - 'A' + 'a' : ch;
 +                    q[len + 1] = 0;
 +                }
-+                run_search(q);
++                if (!kb_naming) run_search(q);
 +                redraw = true; break;
 +            }
 +            case ACT_KEYBOARD:                   /* hold Play again: close */
@@ -3116,6 +3165,7 @@ index 0000000..a9b3522
 +struct plent { char name[80]; char path[MAX_PATH]; char kind; };   /* d=folder p=file l=loose */
 +static struct plent pls[MAX_PL];
 +static int npls;
++static bool pl_dirty;             /* a playlist was made or changed on the iPod */
 +
 +static int pl_cmp(const void *a, const void *b)
 +{
@@ -3370,29 +3420,39 @@ index 0000000..a9b3522
 +    if (!p[0]) strcpy(p, "/");
 +}
 +
++/* one line of an .m3u file -> the song's full path (false: not a song) */
++static bool m3u_line(char *line, const char *dir, char *full, size_t n)
++{
++    char *p = line;
++    if (!strncmp(p, "\xef\xbb\xbf", 3)) p += 3;      /* UTF-8 marker */
++    while (*p == ' ' || *p == '\t') p++;
++    size_t len = strlen(p);
++    while (len && (p[len - 1] == '\r' || p[len - 1] == ' ')) p[--len] = '\0';
++    if (!len || *p == '#') return false;
++    for (char *c = p; *c; c++) if (*c == '\\') *c = '/';
++    if (p[1] == ':') return false;                   /* a Windows path, not on the iPod */
++    if (*p == '/') strlcpy(full, p, n);
++    else snprintf(full, n, "%s/%s", dir, p);
++    path_tidy(full);
++    return true;
++}
++static void m3u_dir(const char *file, char *dir, size_t n)
++{
++    strlcpy(dir, file, n);
++    char *sl = strrchr(dir, '/');
++    if (sl) *sl = '\0';
++}
++
 +/* the songs listed in an .m3u / .m3u8 file */
 +static void fs_read_m3u(const char *file)
 +{
 +    char line[MAX_PATH], full[MAX_PATH], dir[MAX_PATH];
 +    int fd = open(file, O_RDONLY);
 +    if (fd < 0) return;
-+    strlcpy(dir, file, sizeof(dir));
-+    char *sl = strrchr(dir, '/');
-+    if (sl) *sl = '\0';
++    m3u_dir(file, dir, sizeof(dir));
 +    while (!fs_full && read_line(fd, line, sizeof(line)) > 0)
 +    {
-+        char *p = line;
-+        if (!strncmp(p, "\xef\xbb\xbf", 3)) p += 3;      /* UTF-8 marker */
-+        while (*p == ' ' || *p == '\t') p++;
-+        size_t len = strlen(p);
-+        while (len && (p[len - 1] == '\r' || p[len - 1] == ' ')) p[--len] = '\0';
-+        if (!len || *p == '#') continue;
-+        for (char *c = p; *c; c++) if (*c == '\\') *c = '/';
-+        if (p[1] == ':') continue;                   /* a Windows path, not on the iPod */
-+        if (*p == '/') strlcpy(full, p, sizeof(full));
-+        else snprintf(full, sizeof(full), "%s/%s", dir, p);
-+        path_tidy(full);
-+        if (file_exists(full)) fs_add(full);
++        if (m3u_line(line, dir, full, sizeof(full)) && file_exists(full)) fs_add(full);
 +        loading_tick("LOADING", NULL);
 +    }
 +    close(fd);
@@ -3546,6 +3606,18 @@ index 0000000..a9b3522
 +    }
 +    aui_end();
 +    fs_free();
++    /* 2.5.8: a new playlist made from in here shows up in the list too */
++    if (pl_dirty)
++    {
++        char keep[MAX_PATH];
++        strlcpy(keep, pls[i].path, sizeof(keep));
++        pl_dirty = false;
++        pl_scan();
++        l->count = MAX(1, npls);
++        l->sel = 0;
++        for (int k = 0; k < npls; k++)
++            if (!strcmp(pls[k].path, keep)) { l->sel = k; break; }
++    }
 +    return r > 0 ? r : 0;
 +}
 +
@@ -3605,9 +3677,189 @@ index 0000000..a9b3522
 +    return (playing_pl[0] && now_path()[0] && !strcmp(playing_pl, pls[i].path)) ? AUI_ROW_DOT : 0;
 +}
 +
++/* ------------------------------------------------------------------ */
++/* 2.5.8: Add to Playlist (hold Play on a song > Add to Playlist)      */
++/* ------------------------------------------------------------------ */
++#define PK_MAX 64
++struct pkent { char name[64]; char path[MAX_PATH]; bool has; };
++static struct pkent pk[PK_MAX];
++static int pk_n;
++static const char *pk_song;           /* the song being added */
++
++static int pk_cmp(const void *a, const void *b)
++{
++    return strnatcasecmp(((const struct pkent *)a)->name, ((const struct pkent *)b)->name);
++}
++
++/* is that song in this playlist file already? */
++static bool m3u_has(const char *file, const char *song)
++{
++    char line[MAX_PATH], full[MAX_PATH], dir[MAX_PATH];
++    bool found = false;
++    int fd = open(file, O_RDONLY);
++    if (fd < 0) return false;
++    m3u_dir(file, dir, sizeof(dir));
++    while (!found && read_line(fd, line, sizeof(line)) > 0)
++        if (m3u_line(line, dir, full, sizeof(full)) && !strcasecmp(full, song))
++            found = true;
++    close(fd);
++    return found;
++}
++
++/* add the song at the end, written the same way computer-made playlists
++ * are ("../Music/Artist/Album/song.mp3", relative to the playlist) */
++static bool m3u_append(const char *file, const char *song)
++{
++    char dir[MAX_PATH], rel[MAX_PATH];
++    m3u_dir(file, dir, sizeof(dir));
++    rel[0] = '\0';
++    for (const char *c = dir; *c; c++)
++        if (*c == '/' && c[1]) strlcat(rel, "../", sizeof(rel));
++    strlcat(rel, song[0] == '/' ? song + 1 : song, sizeof(rel));
++    int fd = open(file, O_RDWR);
++    if (fd < 0) return false;
++    off_t end = lseek(fd, 0, SEEK_END);
++    bool ok = true;
++    if (end > 0)
++    {
++        char c = '\n';
++        lseek(fd, end - 1, SEEK_SET);
++        if (read(fd, &c, 1) != 1) c = '\n';
++        lseek(fd, 0, SEEK_END);
++        if (c != '\n') ok = write(fd, "\n", 1) == 1;
++    }
++    size_t n = strlen(rel);
++    ok = ok && write(fd, rel, n) == (ssize_t)n && write(fd, "\n", 1) == 1;
++    close(fd);
++    return ok;
++}
++
++/* every playlist file on the iPod (folders of songs can't take more) */
++static void pk_scan(void)
++{
++    pk_n = 0;
++    pl_find_dirs();
++    for (int k = 0; k < pl_nfound; k++)
++    {
++        DIR *d = opendir(pl_found[k]);
++        struct dirent *ent;
++        if (!d) continue;
++        while (pk_n < PK_MAX && (ent = readdir(d)))
++        {
++            if (ent->d_name[0] == '.') continue;
++            if (dir_get_info(d, ent).attribute & ATTR_DIRECTORY) continue;
++            if (!has_ext(ent->d_name, pl_exts)) continue;
++            struct pkent *e = &pk[pk_n++];
++            strlcpy(e->name, ent->d_name, sizeof(e->name));
++            char *dot = strrchr(e->name, '.');
++            if (dot && dot != e->name) *dot = '\0';
++            snprintf(e->path, sizeof(e->path), "%s/%s", pl_found[k], ent->d_name);
++        }
++        closedir(d);
++    }
++    qsort(pk, pk_n, sizeof(pk[0]), pk_cmp);
++    for (int k = 0; k < pk_n; k++)
++    {
++        pk[k].has = m3u_has(pk[k].path, pk_song);
++        loading_tick("LOADING", NULL);
++    }
++}
++
++/* New Playlist: name it with the keyboard; the song goes straight in.
++ * Returns the new file's place in the list (or -1) */
++static int pk_new(void)
++{
++    static char name[41];
++    static char file[MAX_PATH];
++    name[0] = '\0';
++    kb_naming = "Name your playlist";
++    bool ok = kb_run(name, sizeof(name));
++    kb_naming = NULL;
++    size_t len = strlen(name);
++    while (len && name[len - 1] == ' ') name[--len] = '\0';
++    if (!ok || !len) return -1;
++    pl_find_dirs();
++    const char *dir = pl_nfound ? pl_found[0] : PL_DIR;
++    if (!dir_exists(dir)) mkdir(dir);
++    snprintf(file, sizeof(file), "%s/%s.m3u8", dir, name);
++    for (int k = 2; file_exists(file) && k < 100; k++)
++        snprintf(file, sizeof(file), "%s/%s %d.m3u8", dir, name, k);
++    int fd = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0666);
++    if (fd < 0) { splash(2 * HZ, "Couldn't make that playlist"); return -1; }
++    ok = write(fd, "#EXTM3U\n", 8) == 8;
++    close(fd);
++    ok = ok && m3u_append(file, pk_song);
++    pl_dirty = true;
++    splashf(HZ * 3 / 2, ok ? "Made %s - song added" : "Made %s", name);
++    pk_scan();
++    for (int k = 0; k < pk_n; k++)
++        if (!strcmp(pk[k].path, file)) return k;
++    return -1;
++}
++
++static void pk_get(struct aui_list *l, int i, char *buf, size_t n, char *sub, size_t subn)
++{
++    (void)l;
++    if (i == 0)
++    {
++        strlcpy(buf, "New Playlist", n);
++        if (sub) strlcpy(sub, "", subn);
++        return;
++    }
++    strlcpy(buf, pk[i - 1].name, n);
++    if (sub) strlcpy(sub, pk[i - 1].has ? "Song is in here" : "Playlist", subn);
++}
++static int pk_style(struct aui_list *l, int i)
++{
++    (void)l;
++    if (i == 0) return AUI_ROW_ACTION;
++    return pk[i - 1].has ? AUI_ROW_CHECK : 0;
++}
++static int pk_select(struct aui_list *l, int i)
++{
++    if (i == 0)
++    {
++        int k = pk_new();
++        l->count = pk_n + 1;
++        if (k >= 0) l->sel = k + 1;   /* back to the list, on the new one */
++        return 0;
++    }
++    struct pkent *e = &pk[i - 1];
++    if (e->has) { splashf(HZ * 3 / 2, "Already in %s", e->name); return 0; }
++    if (m3u_append(e->path, pk_song))
++    {
++        e->has = true;
++        pl_dirty = true;
++        splashf(HZ, "Added to %s", e->name);
++    }
++    else
++        splash(2 * HZ, "Couldn't add to that playlist");
++    return 0;
++}
++
++static void add_to_playlist(const char *path, const char *name)
++{
++    static char song[MAX_PATH];
++    (void)name;
++    strlcpy(song, path, sizeof(song));
++    path_tidy(song);
++    pk_song = song;
++    aui_begin();
++    loading_screen("LOADING", NULL);
++    pk_scan();
++    struct aui_list l = { 0 };
++    l.title = "Add to Playlist"; l.count = pk_n + 1; l.two_line = true;
++    l.get = pk_get; l.select = pk_select; l.style = pk_style;
++    l.sel = pk_n ? 1 : 0;
++    aui_list_run(&l);
++    aui_end();
++    pk_song = NULL;
++}
++
 +static int playlists(void)
 +{
 +    struct aui_list l = { 0 };
++    pl_dirty = false;
 +    pl_scan();
 +    if (npls == 0)
 +    {
@@ -3760,7 +4012,7 @@ index 0000000..a9b3522
 +    char name[80];
 +    if (i < 0 || i >= q_n) return 0;
 +    queue_names(i, name, sizeof(name), NULL, 0);
-+    song_menu(i == 0 ? NULL : q_path[i], name);
++    song_menu_ex(q_path[i], name, i == 0);
 +    queue_build();
 +    l->count = MAX(1, q_n);
 +    if (l->sel >= l->count) l->sel = l->count - 1;
@@ -4899,14 +5151,15 @@ index 0000000..8ff3b02
 +#endif
 diff --git a/apps/asher/asher_quick.c b/apps/asher/asher_quick.c
 new file mode 100644
-index 0000000..ef43eb2
+index 0000000..611989c
 --- /dev/null
 +++ b/apps/asher/asher_quick.c
-@@ -0,0 +1,319 @@
+@@ -0,0 +1,324 @@
 +/* Asher OS "hold Menu" extras.
-+ *  - asher_music_mode(): on screens that can't control music (Settings...),
-+ *    a music control panel until Menu is held (or pressed) again.
-+ *  - asher_shuffle_menu(): on music screens, a small Shuffle / Repeat menu. */
++ *  - asher_music_mode(): everywhere except Now Playing and Stats (Home,
++ *    Music lists, Settings...): a music control panel with shuffle, until
++ *    Menu is held (or pressed) again.
++ *  - asher_shuffle_menu(): on Now Playing and Stats, a Shuffle / Repeat menu. */
 +#include <stdio.h>
 +#include <string.h>
 +#include "config.h"
@@ -4983,7 +5236,7 @@ index 0000000..ef43eb2
 +    bool playing = (st & AUDIO_STATUS_PLAY) && id3;
 +    unsigned fg, sub;
 +    char buf[64], b2[16];
-+    int x = 10, y = 118, w = AUI_W - 20, h = 112;
++    int x = 10, y = 100, w = AUI_W - 20, h = 132;
 +
 +    snap_draw();
 +    card(x, y, w, h, &fg, &sub);
@@ -5019,6 +5272,10 @@ index 0000000..ef43eb2
 +    else
 +        aui_text(AF_BIG, x + 14, y + 30, fg, "Nothing playing", w - 28, 0);
 +    aui_text(AF_SMALLR, x + w - 14, y + 84, sub, "hold Menu: back", 140, 2);
++    /* 2.5.8: shuffle right here too (centre switches it) */
++    aui_text(AF_SMALL, x + 14, y + 106, aui_theme()->accent,
++             global_settings.playlist_shuffle ? "Shuffle: On" : "Shuffle: Off", 150, 0);
++    aui_text(AF_SMALLR, x + w - 14, y + 106, sub, "centre: shuffle", 140, 2);
 +    aui_update();
 +}
 +
@@ -5237,7 +5494,7 @@ index 0000000..b0dca4f
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000..70c3acf
+index 0000000..fae66f5
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,589 @@
@@ -5265,7 +5522,7 @@ index 0000000..70c3acf
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.5.7"
++#define ASHER_OS_VERSION "2.5.8"
 +#if defined(IPOD_VIDEO) && defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
 +#define MODEL_LABEL "iPod Video (5.5 gen)"
 +#elif defined(IPOD_VIDEO)
@@ -6224,10 +6481,10 @@ index 0000000..101fc74
 +#endif
 diff --git a/apps/asher/asher_theme.c b/apps/asher/asher_theme.c
 new file mode 100644
-index 0000000..721558a
+index 0000000..b2ab7b3
 --- /dev/null
 +++ b/apps/asher/asher_theme.c
-@@ -0,0 +1,406 @@
+@@ -0,0 +1,418 @@
 +#include <stdio.h>
 +#include <string.h>
 +#include <fcntl.h>
@@ -6236,6 +6493,7 @@ index 0000000..721558a
 +#include "kernel.h"
 +#include "action.h"
 +#include "file.h"
++#include "dir.h"
 +#include "settings.h"
 +#include "menu.h"
 +#include "splash.h"
@@ -6442,13 +6700,24 @@ index 0000000..721558a
 +    global_settings.backlight_fade_out = 2000;
 +    backlight_set_fade_out(2000);
 +#endif
-+    /* 2.5.7 battery: paused or sitting in a menu with nothing playing, the
-+     * iPod switches itself off after 5 minutes instead of 10 (it never does
-+     * this while music is playing). A shorter time someone picked is kept. */
-+    if (global_settings.poweroff == 0 || global_settings.poweroff > 5)
++    /* 2.5.8: back to switching off after 10 idle minutes (2.5.7 made it 5,
++     * which meant many more cold starts, and on a 5th gen each start spins
++     * the hard drive through the whole disk again) */
++    if (global_settings.poweroff == 0 || global_settings.poweroff == 5)
 +    {
-+        global_settings.poweroff = 5;
-+        set_poweroff_timeout(5);
++        global_settings.poweroff = 10;
++        set_poweroff_timeout(10);
++    }
++    /* 2.5.8: the music library only looks in your own folders, not in the
++     * Apple music folder (iPod_Control), which can hold thousands of old
++     * synced files: scanning those made rebuilding the library take ages
++     * (drive spinning, everything slow, battery draining) and added
++     * duplicates. Delete iPod_Control/database.ignore to scan it again. */
++    if (dir_exists("/iPod_Control") && dir_exists("/Music")
++        && !file_exists("/iPod_Control/database.ignore"))
++    {
++        int fd = open("/iPod_Control/database.ignore", O_WRONLY | O_CREAT | O_TRUNC, 0666);
++        if (fd >= 0) close(fd);
 +    }
 +    /* the settings above can start the "screen controller sleep" countdown
 +     * while the screen is still coming up, which blanked it a second or two
@@ -6651,10 +6920,10 @@ index 0000000..728fa52
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000..5e07ccd
+index 0000000..bbe0860
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,894 @@
+@@ -0,0 +1,914 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -6679,6 +6948,7 @@ index 0000000..5e07ccd
 +#include "core_alloc.h"
 +#include "asher_mem.h"
 +#include "action.h"
++#include "button.h"
 +#include "asher_ui.h"
 +#include "asher_font3d.h"
 +#include "asher_boot.h"
@@ -6690,6 +6960,7 @@ index 0000000..5e07ccd
 +#endif
 +
 +#define UI_DIR "/.rockbox/asher/ui/"
++#undef FONT_DIR
 +#define FONT_DIR "/.rockbox/fonts/"
 +
 +fb_data aui_fb[LCD_WIDTH * LCD_HEIGHT];
@@ -7412,6 +7683,19 @@ index 0000000..5e07ccd
 +                lcd_vline(ix + 1 + k, iy + 6 - half, iy + 5 + half);
 +            }
 +    }
++#ifdef HAS_BUTTON_HOLD
++    /* 2.5.8: a padlock while the hold switch is on, like the iPod's own */
++    if (button_hold())
++    {
++        int lx = (st & AUDIO_STATUS_PLAY) ? 208 : 224, ly = 8;
++        lcd_set_drawmode(DRMODE_SOLID);
++        lcd_set_foreground(LCD_RGBPACK((c >> 16) & 255, (c >> 8) & 255, c & 255));
++        lcd_fillrect(lx, ly + 6, 11, 8);              /* body */
++        lcd_fillrect(lx + 2, ly + 1, 2, 5);           /* shackle */
++        lcd_fillrect(lx + 7, ly + 1, 2, 5);
++        lcd_fillrect(lx + 3, ly, 5, 2);
++    }
++#endif
 +    int bat = battery_level();
 +    if (bat >= 0)
 +    {
@@ -7546,6 +7830,11 @@ index 0000000..5e07ccd
 +    bool on = is_backlight_on(true), woke = on && !last_on;
 +    last_on = on;
 +    if (aui_dirty) { aui_dirty = false; woke = true; }
++#ifdef HAS_BUTTON_HOLD
++    static bool last_hold;                /* hold switch moved: show/hide the lock */
++    bool hold = button_hold();
++    if (hold != last_hold) { last_hold = hold; woke = true; }
++#endif
 +    if (asher_toast_expired()) woke = true;     /* a pop-up ran out: redraw */
 +    return woke;
 +}

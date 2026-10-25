@@ -1,5 +1,7 @@
 name: Build Asher OS
 on: workflow_dispatch
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -55,10 +57,32 @@ jobs:
           make -j$(nproc)
           make zip
       - name: Package
+        id: pkg
         run: |
+          VER=$(grep -o 'ASHER_OS_VERSION "[^"]*"' rockbox/apps/asher/asher_settings.c | cut -d'"' -f2)
+          echo "name=AsherOS_${VER}_${{ matrix.name }}" >> $GITHUB_OUTPUT
           mkdir out
-          cp rockbox/build/rockbox.zip out/AsherOS_firmware_${{ matrix.name }}.zip
+          cp rockbox/build/rockbox.zip "out/AsherOS_${VER}_${{ matrix.name }}.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: asher-os-${{ matrix.name }}
+          name: ${{ steps.pkg.outputs.name }}
           path: out/
+  publish:
+    # puts the finished zips on the "builds" branch too, so they can be
+    # downloaded straight from the repo
+    needs: build
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: Push zips to the builds branch
+        run: |
+          mkdir site && find dl -name '*.zip' -exec cp {} site/ \;
+          cd site
+          git init -q -b builds
+          git config user.name "Asher OS build"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A && git commit -qm "Asher OS builds from ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" builds
