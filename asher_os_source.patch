@@ -1,5 +1,5 @@
 diff --git a/apps/SOURCES b/apps/SOURCES
-index bb612b38fb..42addc73b9 100644
+index bb612b3..42addc7 100644
 --- a/apps/SOURCES
 +++ b/apps/SOURCES
 @@ -20,6 +20,24 @@ menu.c
@@ -29,7 +29,7 @@ index bb612b38fb..42addc73b9 100644
  menus/radio_menu.c
 diff --git a/apps/asher/asher_boot.c b/apps/asher/asher_boot.c
 new file mode 100644
-index 0000000000..fc5dce5a48
+index 0000000..fc5dce5
 --- /dev/null
 +++ b/apps/asher/asher_boot.c
 @@ -0,0 +1,166 @@
@@ -201,7 +201,7 @@ index 0000000000..fc5dce5a48
 +}
 diff --git a/apps/asher/asher_boot.h b/apps/asher/asher_boot.h
 new file mode 100644
-index 0000000000..376fc9b636
+index 0000000..376fc9b
 --- /dev/null
 +++ b/apps/asher/asher_boot.h
 @@ -0,0 +1,6 @@
@@ -213,7 +213,7 @@ index 0000000000..376fc9b636
 +#endif
 diff --git a/apps/asher/asher_check.h b/apps/asher/asher_check.h
 new file mode 100644
-index 0000000000..7aed25e428
+index 0000000..7aed25e
 --- /dev/null
 +++ b/apps/asher/asher_check.h
 @@ -0,0 +1,27 @@
@@ -246,7 +246,7 @@ index 0000000000..7aed25e428
 +#endif
 diff --git a/apps/asher/asher_font3d.c b/apps/asher/asher_font3d.c
 new file mode 100644
-index 0000000000..06c63876a7
+index 0000000..06c6387
 --- /dev/null
 +++ b/apps/asher/asher_font3d.c
 @@ -0,0 +1,306 @@
@@ -558,7 +558,7 @@ index 0000000000..06c63876a7
 +}
 diff --git a/apps/asher/asher_font3d.h b/apps/asher/asher_font3d.h
 new file mode 100644
-index 0000000000..541fe549c4
+index 0000000..541fe54
 --- /dev/null
 +++ b/apps/asher/asher_font3d.h
 @@ -0,0 +1,19 @@
@@ -583,7 +583,7 @@ index 0000000000..541fe549c4
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
 new file mode 100644
-index 0000000000..2707cfcb0b
+index 0000000..2707cfc
 --- /dev/null
 +++ b/apps/asher/asher_home.c
 @@ -0,0 +1,307 @@
@@ -896,7 +896,7 @@ index 0000000000..2707cfcb0b
 +}
 diff --git a/apps/asher/asher_home.h b/apps/asher/asher_home.h
 new file mode 100644
-index 0000000000..0f36b5cbaa
+index 0000000..0f36b5c
 --- /dev/null
 +++ b/apps/asher/asher_home.h
 @@ -0,0 +1,6 @@
@@ -908,10 +908,10 @@ index 0000000000..0f36b5cbaa
 +#endif
 diff --git a/apps/asher/asher_list.c b/apps/asher/asher_list.c
 new file mode 100644
-index 0000000000..84a295e450
+index 0000000..b11d2f6
 --- /dev/null
 +++ b/apps/asher/asher_list.c
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,309 @@
 +/* Asher OS list screen: thick rounded selection bar, top bar with the
 + * clock, and accelerated scrolling with a first-letter bubble. */
 +#include <stdio.h>
@@ -1128,14 +1128,19 @@ index 0000000000..84a295e450
 +        bool show_letter = l->letter_jump && asher_organize == ORG_ALPHA
 +                           && TIME_BEFORE(current_tick, letter_until);
 +        if (aui_woke()) redraw = true;
-+        if (redraw)
++        /* 2.5.7 battery: with the screen off nothing is drawn (it's redrawn
++         * the moment the screen wakes) and the list only checks in every
++         * 2 seconds instead of every second, like Now Playing and Home */
++        bool on = aui_screen_on();
++        if (redraw && on)
 +        {
 +            aui_list_draw(l, show_letter ? first_letter(l) : 0);
 +            redraw = false;
 +        }
 +        /* every list here is part of Music, so the music keys always work */
-+        int action = list_action(true, asher_toast_tmo(media.seeking ? HZ / 10
-+                                                       : (show_letter ? HZ / 5 : HZ)));
++        int action = list_action(true, !on ? 2 * HZ
++                                 : asher_toast_tmo(media.seeking ? HZ / 10
++                                                   : (show_letter ? HZ / 5 : HZ)));
 +        if (asher_media(&media, action))
 +        {
 +            if (media.seeking || l->style) redraw = true;   /* the dot may move */
@@ -1218,7 +1223,7 @@ index 0000000000..84a295e450
 +}
 diff --git a/apps/asher/asher_list.h b/apps/asher/asher_list.h
 new file mode 100644
-index 0000000000..3156836e43
+index 0000000..3156836
 --- /dev/null
 +++ b/apps/asher/asher_list.h
 @@ -0,0 +1,37 @@
@@ -1261,7 +1266,7 @@ index 0000000000..3156836e43
 +#endif
 diff --git a/apps/asher/asher_media.c b/apps/asher/asher_media.c
 new file mode 100644
-index 0000000000..e1068145d5
+index 0000000..e106814
 --- /dev/null
 +++ b/apps/asher/asher_media.c
 @@ -0,0 +1,114 @@
@@ -1381,7 +1386,7 @@ index 0000000000..e1068145d5
 +}
 diff --git a/apps/asher/asher_media.h b/apps/asher/asher_media.h
 new file mode 100644
-index 0000000000..212c2e81b0
+index 0000000..212c2e8
 --- /dev/null
 +++ b/apps/asher/asher_media.h
 @@ -0,0 +1,16 @@
@@ -1403,7 +1408,7 @@ index 0000000000..212c2e81b0
 +#endif
 diff --git a/apps/asher/asher_mem.c b/apps/asher/asher_mem.c
 new file mode 100644
-index 0000000000..e8c45e0799
+index 0000000..e8c45e0
 --- /dev/null
 +++ b/apps/asher/asher_mem.c
 @@ -0,0 +1,90 @@
@@ -1499,7 +1504,7 @@ index 0000000000..e8c45e0799
 +}
 diff --git a/apps/asher/asher_mem.h b/apps/asher/asher_mem.h
 new file mode 100644
-index 0000000000..303fd28d90
+index 0000000..303fd28
 --- /dev/null
 +++ b/apps/asher/asher_mem.h
 @@ -0,0 +1,12 @@
@@ -1517,7 +1522,7 @@ index 0000000000..303fd28d90
 +#endif
 diff --git a/apps/asher/asher_model.c b/apps/asher/asher_model.c
 new file mode 100644
-index 0000000000..2d95516292
+index 0000000..2d95516
 --- /dev/null
 +++ b/apps/asher/asher_model.c
 @@ -0,0 +1,227 @@
@@ -1750,7 +1755,7 @@ index 0000000000..2d95516292
 +const char *asher_model_serial(void) { detect(); return m_serial; }
 diff --git a/apps/asher/asher_model.h b/apps/asher/asher_model.h
 new file mode 100644
-index 0000000000..602c7f6ed6
+index 0000000..602c7f6
 --- /dev/null
 +++ b/apps/asher/asher_model.h
 @@ -0,0 +1,8 @@
@@ -1764,10 +1769,10 @@ index 0000000000..602c7f6ed6
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000000..36c9cfbfc3
+index 0000000..a9b3522
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,2059 @@
+@@ -0,0 +1,2113 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -2492,6 +2497,22 @@ index 0000000000..36c9cfbfc3
 +    return ((audio_status() & AUDIO_STATUS_PLAY) && id3) ? id3->path : "";
 +}
 +
++/* 2.5.7: is this file the song that's playing right now? */
++static bool is_now_playing(const char *path)
++{
++    const char *p = now_path();
++    return p[0] && path && path[0] && !strcasecmp(p, path);
++}
++
++/* picking the song that's already playing opens Now Playing instead of
++ * starting it over */
++static int open_now_playing(void)
++{
++    asher_np_skip_intro = true;
++    asher_nowplaying();
++    return 0;
++}
++
 +/* ------------------------------------------------------------------ */
 +/* the song menu (hold Play on a song) and the play queue              */
 +/* ------------------------------------------------------------------ */
@@ -2586,6 +2607,10 @@ index 0000000000..36c9cfbfc3
 +static int songs_select(struct aui_list *l, int i)
 +{
 +    struct songs *s = l->data;
++    /* 2.5.7: the song that's playing just opens Now Playing */
++    const char *p = now_path();
++    if (p[0] && lib_find(p) == s->order[i])
++        return open_now_playing();
 +    return play_entries(s->order, s->count, i, false);
 +}
 +static int songs_style(struct aui_list *l, int i)
@@ -3321,6 +3346,30 @@ index 0000000000..36c9cfbfc3
 +    closedir(d);
 +}
 +
++/* 2.5.7: "/Playlists/../Music/x.mp3" -> "/Music/x.mp3". Playlists made on a
++ * computer point at songs with "../Music/..."; the player reports the song
++ * by its plain path, so without this the playing song was never recognised
++ * (no dot in the list, and picking it restarted it) */
++static void path_tidy(char *p)
++{
++    char *src = p, *dst = p;
++    while (*src)
++    {
++        if (src[0] == '/' && src[1] == '/') { src++; continue; }          /* "//" */
++        if (src[0] == '/' && src[1] == '.' && (src[2] == '/' || !src[2]))  /* "/." */
++            { src += 2; continue; }
++        if (src[0] == '/' && src[1] == '.' && src[2] == '.' && (src[3] == '/' || !src[3]))
++        {                                                                /* "/.." */
++            while (dst > p && *--dst != '/') ;
++            src += 3;
++            continue;
++        }
++        *dst++ = *src++;
++    }
++    *dst = '\0';
++    if (!p[0]) strcpy(p, "/");
++}
++
 +/* the songs listed in an .m3u / .m3u8 file */
 +static void fs_read_m3u(const char *file)
 +{
@@ -3342,6 +3391,7 @@ index 0000000000..36c9cfbfc3
 +        if (p[1] == ':') continue;                   /* a Windows path, not on the iPod */
 +        if (*p == '/') strlcpy(full, p, sizeof(full));
 +        else snprintf(full, sizeof(full), "%s/%s", dir, p);
++        path_tidy(full);
 +        if (file_exists(full)) fs_add(full);
 +        loading_tick("LOADING", NULL);
 +    }
@@ -3381,8 +3431,7 @@ index 0000000000..36c9cfbfc3
 +{
 +    (void)l;
 +    if (i < FS_TOP) return AUI_ROW_ACTION;
-+    const char *p = now_path();
-+    return (p[0] && !strcmp(p, FS(i - FS_TOP))) ? AUI_ROW_DOT : 0;
++    return is_now_playing(FS(i - FS_TOP)) ? AUI_ROW_DOT : 0;
 +}
 +
 +/* play the playlist's songs, starting with song 'start' (-1 = shuffle all,
@@ -3435,6 +3484,11 @@ index 0000000000..36c9cfbfc3
 +    (void)l;
 +    if (i == 0) return fs_play(-1);
 +    if (i == 1) return fs_play(-2);
++    /* the song that's playing, from this same playlist: just show it.
++     * (Picked from a different playlist, it starts this playlist instead.) */
++    if (is_now_playing(FS(i - FS_TOP)) && open_pl >= 0
++        && !strcasecmp(playing_pl, pls[open_pl].path))
++        return open_now_playing();
 +    return fs_play(i - FS_TOP);
 +}
 +
@@ -3481,6 +3535,11 @@ index 0000000000..36c9cfbfc3
 +        sl.letter_jump = fs_n > 40 && asher_organize == ORG_ALPHA;
 +        sl.get = fs_get; sl.select = fs_select; sl.style = fs_style;
 +        sl.hold = fs_hold;
++        /* 2.5.7: opening the playlist that's playing lands on the song
++         * that's playing (marked with the dot) */
++        if (!strcasecmp(playing_pl, pls[i].path))
++            for (int k = 0; k < fs_n; k++)
++                if (is_now_playing(FS(k))) { sl.sel = k + FS_TOP; break; }
 +        open_pl = i;
 +        r = aui_list_run(&sl);
 +        open_pl = -1;
@@ -3829,7 +3888,7 @@ index 0000000000..36c9cfbfc3
 +                  library_rebuild, NULL, Icon_NOICON);
 diff --git a/apps/asher/asher_music.h b/apps/asher/asher_music.h
 new file mode 100644
-index 0000000000..781a121ca4
+index 0000000..781a121
 --- /dev/null
 +++ b/apps/asher/asher_music.h
 @@ -0,0 +1,17 @@
@@ -3852,7 +3911,7 @@ index 0000000000..781a121ca4
 +#endif
 diff --git a/apps/asher/asher_nowplaying.c b/apps/asher/asher_nowplaying.c
 new file mode 100644
-index 0000000000..737ca190a2
+index 0000000..737ca19
 --- /dev/null
 +++ b/apps/asher/asher_nowplaying.c
 @@ -0,0 +1,472 @@
@@ -4330,7 +4389,7 @@ index 0000000000..737ca190a2
 +}
 diff --git a/apps/asher/asher_power.c b/apps/asher/asher_power.c
 new file mode 100644
-index 0000000000..bc67bfdc64
+index 0000000..bc67bfd
 --- /dev/null
 +++ b/apps/asher/asher_power.c
 @@ -0,0 +1,301 @@
@@ -4637,7 +4696,7 @@ index 0000000000..bc67bfdc64
 +}
 diff --git a/apps/asher/asher_power.h b/apps/asher/asher_power.h
 new file mode 100644
-index 0000000000..1599b35384
+index 0000000..1599b35
 --- /dev/null
 +++ b/apps/asher/asher_power.h
 @@ -0,0 +1,7 @@
@@ -4650,7 +4709,7 @@ index 0000000000..1599b35384
 +#endif
 diff --git a/apps/asher/asher_prefs.c b/apps/asher/asher_prefs.c
 new file mode 100644
-index 0000000000..957d1b7184
+index 0000000..957d1b7
 --- /dev/null
 +++ b/apps/asher/asher_prefs.c
 @@ -0,0 +1,154 @@
@@ -4810,7 +4869,7 @@ index 0000000000..957d1b7184
 +}
 diff --git a/apps/asher/asher_prefs.h b/apps/asher/asher_prefs.h
 new file mode 100644
-index 0000000000..8ff3b022d0
+index 0000000..8ff3b02
 --- /dev/null
 +++ b/apps/asher/asher_prefs.h
 @@ -0,0 +1,24 @@
@@ -4840,7 +4899,7 @@ index 0000000000..8ff3b022d0
 +#endif
 diff --git a/apps/asher/asher_quick.c b/apps/asher/asher_quick.c
 new file mode 100644
-index 0000000000..ef43eb29a0
+index 0000000..ef43eb2
 --- /dev/null
 +++ b/apps/asher/asher_quick.c
 @@ -0,0 +1,319 @@
@@ -5165,7 +5224,7 @@ index 0000000000..ef43eb29a0
 +}
 diff --git a/apps/asher/asher_quick.h b/apps/asher/asher_quick.h
 new file mode 100644
-index 0000000000..b0dca4f355
+index 0000000..b0dca4f
 --- /dev/null
 +++ b/apps/asher/asher_quick.h
 @@ -0,0 +1,7 @@
@@ -5178,7 +5237,7 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..fc5fbbfa6c
+index 0000000..70c3acf
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,589 @@
@@ -5206,7 +5265,7 @@ index 0000000000..fc5fbbfa6c
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.5.6"
++#define ASHER_OS_VERSION "2.5.7"
 +#if defined(IPOD_VIDEO) && defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
 +#define MODEL_LABEL "iPod Video (5.5 gen)"
 +#elif defined(IPOD_VIDEO)
@@ -5773,7 +5832,7 @@ index 0000000000..fc5fbbfa6c
 +#endif
 diff --git a/apps/asher/asher_settings.h b/apps/asher/asher_settings.h
 new file mode 100644
-index 0000000000..5349121a88
+index 0000000..5349121
 --- /dev/null
 +++ b/apps/asher/asher_settings.h
 @@ -0,0 +1,12 @@
@@ -5791,7 +5850,7 @@ index 0000000000..5349121a88
 +#endif
 diff --git a/apps/asher/asher_stats.c b/apps/asher/asher_stats.c
 new file mode 100644
-index 0000000000..2ae4375ba7
+index 0000000..2ae4375
 --- /dev/null
 +++ b/apps/asher/asher_stats.c
 @@ -0,0 +1,358 @@
@@ -6155,7 +6214,7 @@ index 0000000000..2ae4375ba7
 +}
 diff --git a/apps/asher/asher_stats.h b/apps/asher/asher_stats.h
 new file mode 100644
-index 0000000000..101fc74b20
+index 0000000..101fc74
 --- /dev/null
 +++ b/apps/asher/asher_stats.h
 @@ -0,0 +1,4 @@
@@ -6165,10 +6224,10 @@ index 0000000000..101fc74b20
 +#endif
 diff --git a/apps/asher/asher_theme.c b/apps/asher/asher_theme.c
 new file mode 100644
-index 0000000000..98b4e3f68e
+index 0000000..721558a
 --- /dev/null
 +++ b/apps/asher/asher_theme.c
-@@ -0,0 +1,397 @@
+@@ -0,0 +1,406 @@
 +#include <stdio.h>
 +#include <string.h>
 +#include <fcntl.h>
@@ -6193,6 +6252,7 @@ index 0000000000..98b4e3f68e
 +#include "asher_check.h"
 +#include "asher_mem.h"
 +#include "button.h"
++#include "powermgmt.h"
 +
 +#define ASHER_THEME_DIR "/.rockbox/asher/themes/"
 +#define STATE_FILE      "/.rockbox/asher/state.txt"
@@ -6382,6 +6442,14 @@ index 0000000000..98b4e3f68e
 +    global_settings.backlight_fade_out = 2000;
 +    backlight_set_fade_out(2000);
 +#endif
++    /* 2.5.7 battery: paused or sitting in a menu with nothing playing, the
++     * iPod switches itself off after 5 minutes instead of 10 (it never does
++     * this while music is playing). A shorter time someone picked is kept. */
++    if (global_settings.poweroff == 0 || global_settings.poweroff > 5)
++    {
++        global_settings.poweroff = 5;
++        set_poweroff_timeout(5);
++    }
 +    /* the settings above can start the "screen controller sleep" countdown
 +     * while the screen is still coming up, which blanked it a second or two
 +     * after boot; this restarts the normal screen timer instead */
@@ -6568,7 +6636,7 @@ index 0000000000..98b4e3f68e
 +MAKE_MENU(asher_theme_menu, "Theme", NULL, Icon_NOICON, &thi0, &thi1, &thi2, &thi3);
 diff --git a/apps/asher/asher_theme.h b/apps/asher/asher_theme.h
 new file mode 100644
-index 0000000000..728fa524c6
+index 0000000..728fa52
 --- /dev/null
 +++ b/apps/asher/asher_theme.h
 @@ -0,0 +1,9 @@
@@ -6583,7 +6651,7 @@ index 0000000000..728fa524c6
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..5e07ccd6cc
+index 0000000..5e07ccd
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
 @@ -0,0 +1,894 @@
@@ -7483,7 +7551,7 @@ index 0000000000..5e07ccd6cc
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..4de45a3f61
+index 0000000..4de45a3
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
 @@ -0,0 +1,110 @@
@@ -7599,7 +7667,7 @@ index 0000000000..4de45a3f61
 +#endif
 diff --git a/apps/asher/asher_wallpaper.c b/apps/asher/asher_wallpaper.c
 new file mode 100644
-index 0000000000..e5e7c3a43f
+index 0000000..e5e7c3a
 --- /dev/null
 +++ b/apps/asher/asher_wallpaper.c
 @@ -0,0 +1,289 @@
@@ -7894,7 +7962,7 @@ index 0000000000..e5e7c3a43f
 +}
 diff --git a/apps/asher/asher_wallpaper.h b/apps/asher/asher_wallpaper.h
 new file mode 100644
-index 0000000000..b58a05db32
+index 0000000..b58a05d
 --- /dev/null
 +++ b/apps/asher/asher_wallpaper.h
 @@ -0,0 +1,35 @@
@@ -7935,7 +8003,7 @@ index 0000000000..b58a05db32
 +#endif
 diff --git a/apps/asher/moonphase.c b/apps/asher/moonphase.c
 new file mode 100644
-index 0000000000..3308c53781
+index 0000000..3308c53
 --- /dev/null
 +++ b/apps/asher/moonphase.c
 @@ -0,0 +1,47 @@
@@ -7988,7 +8056,7 @@ index 0000000000..3308c53781
 +}
 diff --git a/apps/asher/moonphase.h b/apps/asher/moonphase.h
 new file mode 100644
-index 0000000000..b49aed02f4
+index 0000000..b49aed0
 --- /dev/null
 +++ b/apps/asher/moonphase.h
 @@ -0,0 +1,9 @@
@@ -8003,7 +8071,7 @@ index 0000000000..b49aed02f4
 +#endif
 diff --git a/apps/asher/moontab.inc b/apps/asher/moontab.inc
 new file mode 100644
-index 0000000000..e28dd7b005
+index 0000000..e28dd7b
 --- /dev/null
 +++ b/apps/asher/moontab.inc
 @@ -0,0 +1,179 @@
@@ -8187,7 +8255,7 @@ index 0000000000..e28dd7b005
 +    43961214, 44001067, 44041840, 44088269, 44131394, 44170123,
 +};
 diff --git a/apps/bitmaps/native/SOURCES b/apps/bitmaps/native/SOURCES
-index 9812851388..eb549d4538 100644
+index 9812851..eb549d4 100644
 --- a/apps/bitmaps/native/SOURCES
 +++ b/apps/bitmaps/native/SOURCES
 @@ -59,6 +59,16 @@ toolsicon.130x130x16.bmp
@@ -11744,7 +11812,7 @@ literal 0
 HcmV?d00001
 
 diff --git a/apps/debug_menu.c b/apps/debug_menu.c
-index c98d54ad64..8f3e244662 100644
+index c98d54a..8f3e244 100644
 --- a/apps/debug_menu.c
 +++ b/apps/debug_menu.c
 @@ -2815,7 +2815,7 @@ static bool view_ram_info(void)
@@ -11757,7 +11825,7 @@ index c98d54ad64..8f3e244662 100644
      struct sysinfo sys_info;
      if (sysinfo(&sys_info) == 0) {
 diff --git a/apps/gui/bitmap/list.c b/apps/gui/bitmap/list.c
-index c2e8896a3e..391389a290 100644
+index c2e8896..391389a 100644
 --- a/apps/gui/bitmap/list.c
 +++ b/apps/gui/bitmap/list.c
 @@ -350,6 +350,20 @@ void list_draw(struct screen *display, struct gui_synclist *list)
@@ -11811,7 +11879,7 @@ index c2e8896a3e..391389a290 100644
      display->set_viewport(last_vp);
  }
 diff --git a/apps/gui/list.c b/apps/gui/list.c
-index 12f17cefef..f0af5ca1fc 100644
+index 12f17ce..f0af5ca 100644
 --- a/apps/gui/list.c
 +++ b/apps/gui/list.c
 @@ -119,7 +119,8 @@ void list_init_item_height(struct gui_synclist *list, enum screen_type screen)
@@ -11825,7 +11893,7 @@ index 12f17cefef..f0af5ca1fc 100644
  }
  
 diff --git a/apps/gui/option_select.c b/apps/gui/option_select.c
-index d70af4d042..766926395a 100644
+index d70af4d..7669263 100644
 --- a/apps/gui/option_select.c
 +++ b/apps/gui/option_select.c
 @@ -385,13 +385,24 @@ static int selection_to_val(const struct settings_list *setting, int selection)
@@ -11863,7 +11931,7 @@ index d70af4d042..766926395a 100644
      gui_synclist_select_item(&lists, selected);
  
 diff --git a/apps/gui/skin_engine/skin_display.c b/apps/gui/skin_engine/skin_display.c
-index f2435fe709..ceeff76d5b 100644
+index f2435fe..ceeff76 100644
 --- a/apps/gui/skin_engine/skin_display.c
 +++ b/apps/gui/skin_engine/skin_display.c
 @@ -68,6 +68,15 @@
@@ -11914,7 +11982,7 @@ index f2435fe709..ceeff76d5b 100644
  
      /* the held peak of a peak meter bar: a block hold_size pixels thick
 diff --git a/apps/gui/skin_engine/skin_engine.c b/apps/gui/skin_engine/skin_engine.c
-index e382fb65c0..ce3d6bd2fe 100644
+index e382fb6..ce3d6bd 100644
 --- a/apps/gui/skin_engine/skin_engine.c
 +++ b/apps/gui/skin_engine/skin_engine.c
 @@ -166,7 +166,17 @@ void settings_apply_skins(void)
@@ -11937,7 +12005,7 @@ index e382fb65c0..ce3d6bd2fe 100644
  
      bool first_run = skin_backdrop_init();
 diff --git a/apps/gui/splash.c b/apps/gui/splash.c
-index 440164984b..5b11efd34a 100644
+index 4401649..5b11efd 100644
 --- a/apps/gui/splash.c
 +++ b/apps/gui/splash.c
 @@ -33,6 +33,10 @@
@@ -12046,7 +12114,7 @@ index 440164984b..5b11efd34a 100644
      {
          struct screen * screen = &(screens[i]);
 diff --git a/apps/gui/usb_screen.c b/apps/gui/usb_screen.c
-index b1a12d2d83..d12626fbe7 100644
+index b1a12d2..d12626f 100644
 --- a/apps/gui/usb_screen.c
 +++ b/apps/gui/usb_screen.c
 @@ -43,6 +43,98 @@
@@ -12438,7 +12506,7 @@ index b1a12d2d83..d12626fbe7 100644
      FOR_NB_SCREENS(i)
      {
 diff --git a/apps/gui/usb_screen.h b/apps/gui/usb_screen.h
-index ca0f181611..7f39962914 100644
+index ca0f181..7f39962 100644
 --- a/apps/gui/usb_screen.h
 +++ b/apps/gui/usb_screen.h
 @@ -24,8 +24,10 @@
@@ -12453,7 +12521,7 @@ index ca0f181611..7f39962914 100644
  
  #endif
 diff --git a/apps/gui/viewport.c b/apps/gui/viewport.c
-index 5f5703bf54..1fafee1800 100644
+index 5f5703b..1fafee1 100644
 --- a/apps/gui/viewport.c
 +++ b/apps/gui/viewport.c
 @@ -232,9 +232,15 @@ void viewportmanager_init(void)
@@ -12476,7 +12544,7 @@ index 5f5703bf54..1fafee1800 100644
      add_event(GUI_EVENT_ACTIONUPDATE, viewportmanager_update);
  }
 diff --git a/apps/iap/iap-lingo4.c b/apps/iap/iap-lingo4.c
-index d29f4d1612..16504e8791 100644
+index d29f4d1..16504e8 100644
 --- a/apps/iap/iap-lingo4.c
 +++ b/apps/iap/iap-lingo4.c
 @@ -1038,7 +1038,7 @@ void iap_handlepkt_mode4(const unsigned int len, const unsigned char *buf)
@@ -12489,7 +12557,7 @@ index d29f4d1612..16504e8791 100644
              if (fd >= 0) {
                  read_line(fd, ipod_name, sizeof(ipod_name));
 diff --git a/apps/keymaps/keymap-ipod.c b/apps/keymaps/keymap-ipod.c
-index 787d930468..d523b55cba 100644
+index 787d930..d523b55 100644
 --- a/apps/keymaps/keymap-ipod.c
 +++ b/apps/keymaps/keymap-ipod.c
 @@ -50,7 +50,8 @@ static const struct button_mapping button_context_standard[]  = {
@@ -12503,7 +12571,7 @@ index 787d930468..d523b55cba 100644
      LAST_ITEM_IN_LIST
  }; /* button_context_standard */
 diff --git a/apps/lang/english.lang b/apps/lang/english.lang
-index 112c4d9257..8b7ff4d209 100644
+index 112c4d9..8b7ff4d 100644
 --- a/apps/lang/english.lang
 +++ b/apps/lang/english.lang
 @@ -92,13 +92,13 @@
@@ -12541,7 +12609,7 @@ index 112c4d9257..8b7ff4d209 100644
  </phrase>
  <phrase>
 diff --git a/apps/main.c b/apps/main.c
-index 38bc18925a..0fe78c8d15 100644
+index 38bc189..0fe78c8 100644
 --- a/apps/main.c
 +++ b/apps/main.c
 @@ -1,3 +1,5 @@
@@ -12583,7 +12651,7 @@ index 38bc18925a..0fe78c8d15 100644
  
  #ifdef CPU_PP
 diff --git a/apps/menu.c b/apps/menu.c
-index f81c1665a5..1fe2f0f344 100644
+index f81c166..1fe2f0f 100644
 --- a/apps/menu.c
 +++ b/apps/menu.c
 @@ -32,6 +32,7 @@
@@ -12611,7 +12679,7 @@ index f81c1665a5..1fe2f0f344 100644
              if (global_settings.shortcuts_replaces_qs ||
                  quickscreen_show(action) == QUICKSCREEN_GOTO_SHORTCUTS_MENU)
 diff --git a/apps/menus/main_menu.c b/apps/menus/main_menu.c
-index a09d81de3d..3a107e7696 100644
+index a09d81d..7ee8305 100644
 --- a/apps/menus/main_menu.c
 +++ b/apps/menus/main_menu.c
 @@ -26,6 +26,9 @@
@@ -12624,20 +12692,20 @@ index a09d81de3d..3a107e7696 100644
  #include "power.h"
  #include "powermgmt.h"
  #include "menu.h"
-@@ -489,8 +492,10 @@ MENUITEM_FUNCTION(show_legal_item, 0, ID2P(LANG_LEGAL_NOTICES),
+@@ -488,9 +491,10 @@ MENUITEM_FUNCTION(debug_menu_item, 0, ID2P(LANG_DEBUG),
+ MENUITEM_FUNCTION(show_legal_item, 0, ID2P(LANG_LEGAL_NOTICES),
                    show_legal, NULL, Icon_NOICON);
  
++/* 2.5.7: Time & Date is only in the main Settings list now (it used to be in
++ * System as well, so it showed up twice) */
  MAKE_MENU(info_menu, ID2P(LANG_SYSTEM), 0, Icon_System_menu,
 -          &show_info_item, &show_credits_item,
 -          &show_runtime_item, &show_legal_item, &debug_menu_item);
-+#if CONFIG_RTC
-+          &timedate_item,
-+#endif
 +          &asher_version_item, &show_runtime_item);
  /*      INFO MENU                  */
  /***********************************/
  
-@@ -501,24 +506,31 @@ static int main_menu_config(void)
+@@ -501,24 +505,33 @@ static int main_menu_config(void)
  }
  
  MENUITEM_FUNCTION(main_menu_config_item, 0, ID2P(LANG_MAIN_MENU),
@@ -12667,9 +12735,9 @@ index a09d81de3d..3a107e7696 100644
 +#ifdef HAVE_HEADPHONE_DETECTION
 +        &asher_unplug_menu,
  #endif
--#if CONFIG_RTC
+ #if CONFIG_RTC
          &timedate_item,
--#endif
+ #endif
 -        &main_menu_config_item,
 -        &manage_settings,
 +        &asher_library_item,
@@ -12679,7 +12747,7 @@ index a09d81de3d..3a107e7696 100644
  /*    MAIN MENU                    */
  /***********************************/
 diff --git a/apps/menus/sound_menu.c b/apps/menus/sound_menu.c
-index 61d16f4cb1..6f41f4bf04 100644
+index 61d16f4..6f41f4b 100644
 --- a/apps/menus/sound_menu.c
 +++ b/apps/menus/sound_menu.c
 @@ -36,6 +36,8 @@
@@ -12780,7 +12848,7 @@ index 61d16f4cb1..6f41f4bf04 100644
 +          ,&asher_sound_reset_item
           );
 diff --git a/apps/misc.c b/apps/misc.c
-index 983fbc92f3..c6e5b55f3f 100644
+index 983fbc9..c6e5b55 100644
 --- a/apps/misc.c
 +++ b/apps/misc.c
 @@ -25,6 +25,7 @@
@@ -12879,7 +12947,7 @@ index 983fbc92f3..c6e5b55f3f 100644
          last_button = button;
      else
 diff --git a/apps/playback.c b/apps/playback.c
-index d69b28cd2c..690d99f471 100644
+index d69b28c..690d99f 100644
 --- a/apps/playback.c
 +++ b/apps/playback.c
 @@ -1080,7 +1080,21 @@ static void audio_reset_buffer(void)
@@ -12905,7 +12973,7 @@ index d69b28cd2c..690d99f471 100644
      if (audiobuf_handle > 0)
          audio_reset_buffer_noalloc(core_get_data(audiobuf_handle));
 diff --git a/apps/playlist.c b/apps/playlist.c
-index 430a2ca117..8ffd8d63e5 100644
+index 430a2ca..8ffd8d6 100644
 --- a/apps/playlist.c
 +++ b/apps/playlist.c
 @@ -4174,3 +4174,55 @@ error:
@@ -12965,7 +13033,7 @@ index 430a2ca117..8ffd8d63e5 100644
 +    return removed;
 +}
 diff --git a/apps/playlist.h b/apps/playlist.h
-index a906221664..579f8efa12 100644
+index a906221..579f8ef 100644
 --- a/apps/playlist.h
 +++ b/apps/playlist.h
 @@ -186,5 +186,11 @@ int playlist_directory_tracksearch(const char* dirname, bool recurse,
@@ -12981,7 +13049,7 @@ index a906221664..579f8efa12 100644
  
  #endif /* __PLAYLIST_H__ */
 diff --git a/apps/plugins/battery_bench.c b/apps/plugins/battery_bench.c
-index 5a129c6136..8e66ac6512 100644
+index 5a129c6..8e66ac6 100644
 --- a/apps/plugins/battery_bench.c
 +++ b/apps/plugins/battery_bench.c
 @@ -693,7 +693,7 @@ enum plugin_status plugin_start(const void* parameter)
@@ -13003,7 +13071,7 @@ index 5a129c6136..8e66ac6512 100644
          rb->close(fd);
      }
 diff --git a/apps/plugins/chip8.c b/apps/plugins/chip8.c
-index bf22fcb0b9..ccc855af5a 100644
+index bf22fcb..ccc855a 100644
 --- a/apps/plugins/chip8.c
 +++ b/apps/plugins/chip8.c
 @@ -1569,7 +1569,7 @@ static bool chip8_run(const char* file)
@@ -13016,7 +13084,7 @@ index bf22fcb0b9..ccc855af5a 100644
      rb->lcd_puts(0, 5, "---------------");
      ok = chip8_init(file);
 diff --git a/apps/plugins/cue_playlist.c b/apps/plugins/cue_playlist.c
-index 653cbf58f5..d0d6a0fd81 100644
+index 653cbf5..d0d6a0f 100644
 --- a/apps/plugins/cue_playlist.c
 +++ b/apps/plugins/cue_playlist.c
 @@ -251,7 +251,7 @@ static void init_new_cue(const char *playlist_filename)
@@ -13029,7 +13097,7 @@ index 653cbf58f5..d0d6a0fd81 100644
  
          rb->fdprintf(cps.cue_fd, "TITLE \"%s\"\n", playlist_filename); /* top level TITLE */
 diff --git a/apps/plugins/iriver_flash.c b/apps/plugins/iriver_flash.c
-index 2b6f70adf9..ddcfe3c562 100644
+index 2b6f70a..ddcfe3c 100644
 --- a/apps/plugins/iriver_flash.c
 +++ b/apps/plugins/iriver_flash.c
 @@ -520,9 +520,9 @@ bail: /* common exit code */
@@ -13054,7 +13122,7 @@ index 2b6f70adf9..ddcfe3c562 100644
      }
      else
 diff --git a/apps/plugins/pdbox/PDa/src/s_stuff.h b/apps/plugins/pdbox/PDa/src/s_stuff.h
-index 566df34773..bed8b10d47 100644
+index 566df34..bed8b10 100644
 --- a/apps/plugins/pdbox/PDa/src/s_stuff.h
 +++ b/apps/plugins/pdbox/PDa/src/s_stuff.h
 @@ -146,7 +146,7 @@ void sys_setvirtualalarm( void);
@@ -13067,7 +13135,7 @@ index 566df34773..bed8b10d47 100644
  #define DEFAULTAUDIODEV 0
  
 diff --git a/apps/plugins/rb_info.c b/apps/plugins/rb_info.c
-index 42b9a92052..c92f362017 100644
+index 42b9a92..c92f362 100644
 --- a/apps/plugins/rb_info.c
 +++ b/apps/plugins/rb_info.c
 @@ -82,7 +82,7 @@ static void synclist_set(char*, int, int, int);
@@ -13089,7 +13157,7 @@ index 42b9a92052..c92f362017 100644
  MENU_ITEM(M_BUFFERS, ID2P(LANG_BUFFER_STAT), ARRAYLEN(m_buffer)),
  MENU_ITEM(M_BUTTONS, "Buttons", -1), /* Set at runtime in plugin_start: */
 diff --git a/apps/plugins/sdl/src/file/SDL_rwops.c b/apps/plugins/sdl/src/file/SDL_rwops.c
-index 06e3778604..d5255fbe64 100644
+index 06e3778..d5255fb 100644
 --- a/apps/plugins/sdl/src/file/SDL_rwops.c
 +++ b/apps/plugins/sdl/src/file/SDL_rwops.c
 @@ -495,7 +495,7 @@ SDL_RWops *SDL_RWFromFile(const char *file, const char *mode)
@@ -13102,7 +13170,7 @@ index 06e3778604..d5255fbe64 100644
          }
  #endif
 diff --git a/apps/plugins/test_gfx.c b/apps/plugins/test_gfx.c
-index a4a1811a18..2f656a991c 100644
+index a4a1811..2f656a9 100644
 --- a/apps/plugins/test_gfx.c
 +++ b/apps/plugins/test_gfx.c
 @@ -360,7 +360,7 @@ static void time_text(void) /* tests mono_bitmap performance */
@@ -13151,7 +13219,7 @@ index a4a1811a18..2f656a991c 100644
      rb->lcd_setfont(FONT_SYSFIXED);
      count1 = count2 = count3 = count4 = 0;
 diff --git a/apps/root_menu.c b/apps/root_menu.c
-index 918669b245..2a828d63ec 100644
+index 918669b..2a828d6 100644
 --- a/apps/root_menu.c
 +++ b/apps/root_menu.c
 @@ -25,6 +25,11 @@
@@ -13282,7 +13350,7 @@ index 918669b245..2a828d63ec 100644
                  ignore_back_button_stub(false);
  
 diff --git a/apps/tagcache.c b/apps/tagcache.c
-index 4ad028869e..2da0324caa 100644
+index 4ad0288..2da0324 100644
 --- a/apps/tagcache.c
 +++ b/apps/tagcache.c
 @@ -95,6 +95,18 @@
@@ -13507,7 +13575,7 @@ index 4ad028869e..2da0324caa 100644
                  else
  #endif /* HAVE_RC_RAMCACHE */
 diff --git a/firmware/backlight.c b/firmware/backlight.c
-index 781434e07b..a6b02061ac 100644
+index 781434e..a6b0206 100644
 --- a/firmware/backlight.c
 +++ b/firmware/backlight.c
 @@ -322,11 +322,13 @@ static void backlight_switch(void)
@@ -13800,7 +13868,7 @@ index 781434e07b..a6b02061ac 100644
          && remote_button_hold()
  #elif defined(HAS_BUTTON_HOLD)
 diff --git a/firmware/drivers/button_queue.c b/firmware/drivers/button_queue.c
-index 3c6dd9ed74..89390982b4 100644
+index 3c6dd9e..8939098 100644
 --- a/firmware/drivers/button_queue.c
 +++ b/firmware/drivers/button_queue.c
 @@ -126,13 +126,18 @@ static inline void button_queue_wait(struct queue_event *evp, int timeout)
@@ -13831,7 +13899,7 @@ index 3c6dd9ed74..89390982b4 100644
  
      /* on touchscreen we posted unconditionally */
 diff --git a/firmware/drivers/ramdisk.c b/firmware/drivers/ramdisk.c
-index 2071529e29..ccbdf8113b 100644
+index 2071529..ccbdf81 100644
 --- a/firmware/drivers/ramdisk.c
 +++ b/firmware/drivers/ramdisk.c
 @@ -115,7 +115,7 @@ void ramdisk_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -13844,7 +13912,7 @@ index 2071529e29..ccbdf8113b 100644
      info->product="Ramdisk";
  
 diff --git a/firmware/drivers/sd.c b/firmware/drivers/sd.c
-index 157e22ae7b..84892ae1f4 100644
+index 157e22a..84892ae 100644
 --- a/firmware/drivers/sd.c
 +++ b/firmware/drivers/sd.c
 @@ -42,7 +42,7 @@ void sd_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -13857,7 +13925,7 @@ index 157e22ae7b..84892ae1f4 100644
      info->product = (drive==0) ? "Internal Storage" : "SD Card Slot";
  #else   /* Internal storage is not SD */
 diff --git a/firmware/eeprom_settings.c b/firmware/eeprom_settings.c
-index abd719b89a..6457293931 100644
+index abd719b..6457293 100644
 --- a/firmware/eeprom_settings.c
 +++ b/firmware/eeprom_settings.c
 @@ -57,7 +57,7 @@ bool eeprom_settings_init(void)
@@ -13879,7 +13947,7 @@ index abd719b89a..6457293931 100644
      }
      
 diff --git a/firmware/export/config/android.h b/firmware/export/config/android.h
-index 60f094b36d..9f583e26be 100644
+index 60f094b..9f583e2 100644
 --- a/firmware/export/config/android.h
 +++ b/firmware/export/config/android.h
 @@ -9,7 +9,7 @@
@@ -13892,7 +13960,7 @@ index 60f094b36d..9f583e26be 100644
  #define USB_NONE
  
 diff --git a/firmware/export/config/sdlapp.h b/firmware/export/config/sdlapp.h
-index 5a5ef2ccae..2ceb3d3b0c 100644
+index 5a5ef2c..2ceb3d3 100644
 --- a/firmware/export/config/sdlapp.h
 +++ b/firmware/export/config/sdlapp.h
 @@ -9,7 +9,7 @@
@@ -13905,7 +13973,7 @@ index 5a5ef2ccae..2ceb3d3b0c 100644
  #define USB_NONE
  
 diff --git a/firmware/export/usb.h b/firmware/export/usb.h
-index de48c890f9..6448e815bd 100644
+index de48c89..6448e81 100644
 --- a/firmware/export/usb.h
 +++ b/firmware/export/usb.h
 @@ -124,6 +124,9 @@ enum
@@ -13935,7 +14003,7 @@ index de48c890f9..6448e815bd 100644
  int usb_detect(void);
  #ifdef USB_STATUS_BY_EVENT
 diff --git a/firmware/powermgmt.c b/firmware/powermgmt.c
-index e89c0ce034..aacc69659f 100644
+index e89c0ce..aacc696 100644
 --- a/firmware/powermgmt.c
 +++ b/firmware/powermgmt.c
 @@ -718,6 +718,11 @@ static void collect_power_history(void)
@@ -13989,7 +14057,7 @@ index e89c0ce034..aacc69659f 100644
      }
  
 diff --git a/firmware/target/arm/ata-nand-telechips.c b/firmware/target/arm/ata-nand-telechips.c
-index c7954e3188..e59255a3b4 100644
+index c7954e3..e59255a 100644
 --- a/firmware/target/arm/ata-nand-telechips.c
 +++ b/firmware/target/arm/ata-nand-telechips.c
 @@ -886,7 +886,7 @@ void nand_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -14002,7 +14070,7 @@ index c7954e3188..e59255a3b4 100644
  
      /* blocks count */
 diff --git a/firmware/target/arm/imx233/sdmmc-imx233.c b/firmware/target/arm/imx233/sdmmc-imx233.c
-index 6b62f3bab7..c1e431e1c1 100644
+index 6b62f3b..c1e431e 100644
 --- a/firmware/target/arm/imx233/sdmmc-imx233.c
 +++ b/firmware/target/arm/imx233/sdmmc-imx233.c
 @@ -965,7 +965,7 @@ void mmc_get_info(IF_MD(int mmc_drive,) struct storage_info *info)
@@ -14015,7 +14083,7 @@ index 6b62f3bab7..c1e431e1c1 100644
      info->revision = "0.00";
  }
 diff --git a/firmware/target/arm/ipod/button-clickwheel.c b/firmware/target/arm/ipod/button-clickwheel.c
-index 1f4ca13dc8..b463cfddbc 100644
+index 1f4ca13..b463cfd 100644
 --- a/firmware/target/arm/ipod/button-clickwheel.c
 +++ b/firmware/target/arm/ipod/button-clickwheel.c
 @@ -69,7 +69,24 @@
@@ -14092,7 +14160,7 @@ index 1f4ca13dc8..b463cfddbc 100644
      if (hold_button != hold_button_old)
      {
 diff --git a/firmware/target/arm/ipod/video/lcd-video.c b/firmware/target/arm/ipod/video/lcd-video.c
-index 5ab9498e42..fc4f3d3a1d 100644
+index 5ab9498..fc4f3d3 100644
 --- a/firmware/target/arm/ipod/video/lcd-video.c
 +++ b/firmware/target/arm/ipod/video/lcd-video.c
 @@ -110,6 +110,10 @@ struct
@@ -14198,7 +14266,7 @@ index 5ab9498e42..fc4f3d3a1d 100644
  }
  
 diff --git a/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c b/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c
-index 57ee0a9cd0..983a5ce622 100644
+index 57ee0a9..983a5ce 100644
 --- a/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c
 +++ b/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c
 @@ -95,6 +95,14 @@ void piezo_button_beep(bool beep, bool force)
@@ -14217,7 +14285,7 @@ index 57ee0a9cd0..983a5ce622 100644
  void piezo_tone(uint32_t period /*uS*/, int32_t duration /*ms*/)
  {
 diff --git a/firmware/target/arm/s5l8702/ipod6g/piezo.h b/firmware/target/arm/s5l8702/ipod6g/piezo.h
-index a4489dd8ff..3f1c7c60a4 100644
+index a4489dd..3f1c7c6 100644
 --- a/firmware/target/arm/s5l8702/ipod6g/piezo.h
 +++ b/firmware/target/arm/s5l8702/ipod6g/piezo.h
 @@ -25,6 +25,7 @@ void piezo_stop(void);
@@ -14229,7 +14297,7 @@ index a4489dd8ff..3f1c7c60a4 100644
  #ifdef BOOTLOADER
  #include <inttypes.h>
 diff --git a/firmware/target/arm/s5l8702/ipod6g/pmu-6g.c b/firmware/target/arm/s5l8702/ipod6g/pmu-6g.c
-index 91d0da0c1a..8d04ceb978 100644
+index 91d0da0..8d04ceb 100644
 --- a/firmware/target/arm/s5l8702/ipod6g/pmu-6g.c
 +++ b/firmware/target/arm/s5l8702/ipod6g/pmu-6g.c
 @@ -270,7 +270,13 @@ static void NORETURN_ATTR pmu_thread(void)
@@ -14261,7 +14329,7 @@ index 91d0da0c1a..8d04ceb978 100644
          }
      }
 diff --git a/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c b/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c
-index 9509e1c0b8..fead002073 100644
+index 9509e1c..fead002 100644
 --- a/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c
 +++ b/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c
 @@ -309,7 +309,7 @@ void nand_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -14274,7 +14342,7 @@ index 9509e1c0b8..fead002073 100644
      info->revision = "chk1";
  }
 diff --git a/firmware/target/arm/s5l8702/ipodnano3g/piezo-nano3g.c b/firmware/target/arm/s5l8702/ipodnano3g/piezo-nano3g.c
-index 5ff28a802f..f088ab9a01 100644
+index 5ff28a8..f088ab9 100644
 --- a/firmware/target/arm/s5l8702/ipodnano3g/piezo-nano3g.c
 +++ b/firmware/target/arm/s5l8702/ipodnano3g/piezo-nano3g.c
 @@ -85,6 +85,14 @@ void piezo_init(void)
@@ -14305,7 +14373,7 @@ index 5ff28a802f..f088ab9a01 100644
  }
  
 diff --git a/firmware/target/arm/s5l8702/ipodnano3g/piezo.h b/firmware/target/arm/s5l8702/ipodnano3g/piezo.h
-index 87b5517351..2e77407b4e 100644
+index 87b5517..2e77407 100644
 --- a/firmware/target/arm/s5l8702/ipodnano3g/piezo.h
 +++ b/firmware/target/arm/s5l8702/ipodnano3g/piezo.h
 @@ -26,6 +26,7 @@ void piezo_stop(void);
@@ -14317,7 +14385,7 @@ index 87b5517351..2e77407b4e 100644
  #ifdef BOOTLOADER
  #include <inttypes.h>
 diff --git a/firmware/target/arm/s5l8702/ipodnano3g/pmu-nano3g.c b/firmware/target/arm/s5l8702/ipodnano3g/pmu-nano3g.c
-index e688e01402..86cf923284 100644
+index e688e01..86cf923 100644
 --- a/firmware/target/arm/s5l8702/ipodnano3g/pmu-nano3g.c
 +++ b/firmware/target/arm/s5l8702/ipodnano3g/pmu-nano3g.c
 @@ -257,7 +257,11 @@ static void pmu_read_inputs(void)
@@ -14360,7 +14428,7 @@ index e688e01402..86cf923284 100644
          }
      }
 diff --git a/firmware/target/arm/s5l8702/lcd-s5l8702.c b/firmware/target/arm/s5l8702/lcd-s5l8702.c
-index 1c87d37da0..348413daf0 100644
+index 1c87d37..348413d 100644
 --- a/firmware/target/arm/s5l8702/lcd-s5l8702.c
 +++ b/firmware/target/arm/s5l8702/lcd-s5l8702.c
 @@ -406,9 +406,43 @@ static void displaylcd_wait_dma(void)
@@ -14424,7 +14492,7 @@ index 1c87d37da0..348413daf0 100644
              /* Write all lines at once */
              memcpy(out, p, pixels * 2);
 diff --git a/firmware/target/arm/tms320dm320/debug-dm320.c b/firmware/target/arm/tms320dm320/debug-dm320.c
-index badf272dcf..4257d1508d 100644
+index badf272..4257d15 100644
 --- a/firmware/target/arm/tms320dm320/debug-dm320.c
 +++ b/firmware/target/arm/tms320dm320/debug-dm320.c
 @@ -370,7 +370,7 @@ bool dbg_hw_info(void)
@@ -14437,7 +14505,7 @@ index badf272dcf..4257d1508d 100644
              (unsigned int)current_tick, (unsigned int)current_tick/100);
  #if defined(MROBE_500)
 diff --git a/firmware/target/hosted/android/debug-android.c b/firmware/target/hosted/android/debug-android.c
-index 229c836af6..647f2de86c 100644
+index 229c836..647f2de 100644
 --- a/firmware/target/hosted/android/debug-android.c
 +++ b/firmware/target/hosted/android/debug-android.c
 @@ -27,7 +27,7 @@
@@ -14450,7 +14518,7 @@ index 229c836af6..647f2de86c 100644
  void debug_init(void) {}
  
 diff --git a/firmware/target/hosted/hiby/usb-hiby-gadget.c b/firmware/target/hosted/hiby/usb-hiby-gadget.c
-index c252f6d64e..d3549fa42b 100644
+index c252f6d..d3549fa 100644
 --- a/firmware/target/hosted/hiby/usb-hiby-gadget.c
 +++ b/firmware/target/hosted/hiby/usb-hiby-gadget.c
 @@ -523,6 +523,6 @@ void usb_init_device(void)
@@ -14462,7 +14530,7 @@ index c252f6d64e..d3549fa42b 100644
      sysfs_set_string("/sys/kernel/config/usb_gadget/adb_demo/strings/0x409/serialnumber", "0123456789ABCDEF");
  }
 diff --git a/firmware/target/hosted/ibasso/debug-ibasso.c b/firmware/target/hosted/ibasso/debug-ibasso.c
-index 6295de1f6c..cb24fc3611 100644
+index 6295de1..cb24fc3 100644
 --- a/firmware/target/hosted/ibasso/debug-ibasso.c
 +++ b/firmware/target/hosted/ibasso/debug-ibasso.c
 @@ -33,7 +33,7 @@
@@ -14475,7 +14543,7 @@ index 6295de1f6c..cb24fc3611 100644
  
  void debug_init(void)
 diff --git a/firmware/target/hosted/sdl/button-sdl.c b/firmware/target/hosted/sdl/button-sdl.c
-index a329bb6fc1..b2a609c2bf 100644
+index a329bb6..b2a609c 100644
 --- a/firmware/target/hosted/sdl/button-sdl.c
 +++ b/firmware/target/hosted/sdl/button-sdl.c
 @@ -408,7 +408,7 @@ static void show_sim_help(void)
@@ -14488,7 +14556,7 @@ index a329bb6fc1..b2a609c2bf 100644
      #define HELPTXT(SDLK,litdesc)                       \
          keyname = SDL_GetKeyName(SDLK);                 \
 diff --git a/firmware/target/hosted/sdl/sim-ui-defines.h b/firmware/target/hosted/sdl/sim-ui-defines.h
-index f6686ca619..427872eeb3 100644
+index f6686ca..427872e 100644
 --- a/firmware/target/hosted/sdl/sim-ui-defines.h
 +++ b/firmware/target/hosted/sdl/sim-ui-defines.h
 @@ -384,7 +384,7 @@
@@ -14501,7 +14569,7 @@ index f6686ca619..427872eeb3 100644
  #define UI_LCD_POSY                 0
  #define UI_WIDTH                    LCD_WIDTH
 diff --git a/firmware/target/hosted/usb-hiby.c b/firmware/target/hosted/usb-hiby.c
-index 050c86e446..74a5e0d95f 100644
+index 050c86e..74a5e0d 100644
 --- a/firmware/target/hosted/usb-hiby.c
 +++ b/firmware/target/hosted/usb-hiby.c
 @@ -137,7 +137,7 @@ void usb_init_device(void)
@@ -14515,7 +14583,7 @@ index 050c86e446..74a5e0d95f 100644
 +    sysfs_set_string("/sys/class/android_usb/android0/f_mass_storage/inquiry_string", "Asher OS 0100");
  }
 diff --git a/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4740.c b/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4740.c
-index 368d7c062d..17c71ee4ae 100644
+index 368d7c0..17c71ee 100644
 --- a/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4740.c
 +++ b/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4740.c
 @@ -730,7 +730,7 @@ void nand_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -14528,7 +14596,7 @@ index 368d7c062d..17c71ee4ae 100644
  
      /* blocks count */
 diff --git a/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4760.c b/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4760.c
-index 2aebcad327..b505784b45 100644
+index 2aebcad..b505784 100644
 --- a/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4760.c
 +++ b/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4760.c
 @@ -665,7 +665,7 @@ void nand_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -14541,7 +14609,7 @@ index 2aebcad327..b505784b45 100644
  
      /* blocks count */
 diff --git a/firmware/usb.c b/firmware/usb.c
-index b5b556516c..2838668365 100644
+index b5b5565..2838668 100644
 --- a/firmware/usb.c
 +++ b/firmware/usb.c
 @@ -35,12 +35,14 @@
@@ -14811,7 +14879,7 @@ index b5b556516c..2838668365 100644
  {
  }
 diff --git a/firmware/usbstack/iap/libiap/iap.c b/firmware/usbstack/iap/libiap/iap.c
-index af1fe2545c..3234da10e7 100644
+index af1fe25..3234da1 100644
 --- a/firmware/usbstack/iap/libiap/iap.c
 +++ b/firmware/usbstack/iap/libiap/iap.c
 @@ -205,7 +205,7 @@ static int32_t handle_command(struct IAPContext* ctx, uint8_t lingo, uint16_t co
@@ -14824,7 +14892,7 @@ index af1fe2545c..3234da10e7 100644
              if (fd >= 0) {
                  read_line(fd, ipod_name, sizeof(ipod_name));
 diff --git a/firmware/usbstack/usb_core.c b/firmware/usbstack/usb_core.c
-index f1b7359973..b76874c384 100644
+index f1b7359..b76874c 100644
 --- a/firmware/usbstack/usb_core.c
 +++ b/firmware/usbstack/usb_core.c
 @@ -53,6 +53,9 @@
@@ -14886,7 +14954,7 @@ index f1b7359973..b76874c384 100644
            *p-- = hex[x & 0xf];
            x >>= 4;
 diff --git a/firmware/usbstack/usb_storage.c b/firmware/usbstack/usb_storage.c
-index a262770e4a..546921789a 100644
+index a262770..5469217 100644
 --- a/firmware/usbstack/usb_storage.c
 +++ b/firmware/usbstack/usb_storage.c
 @@ -315,6 +315,8 @@ static struct {
@@ -15127,7 +15195,7 @@ index a262770e4a..546921789a 100644
      cur_sense_data.sense_key = SENSE_ILLEGAL_REQUEST;
 diff --git a/tools/asher/make_assets.py b/tools/asher/make_assets.py
 new file mode 100644
-index 0000000000..7942994676
+index 0000000..7942994
 --- /dev/null
 +++ b/tools/asher/make_assets.py
 @@ -0,0 +1,10 @@
@@ -15143,7 +15211,7 @@ index 0000000000..7942994676
 +print("ok")
 diff --git a/tools/asher/video_to_awp.py b/tools/asher/video_to_awp.py
 new file mode 100644
-index 0000000000..226944833a
+index 0000000..2269448
 --- /dev/null
 +++ b/tools/asher/video_to_awp.py
 @@ -0,0 +1,23 @@
