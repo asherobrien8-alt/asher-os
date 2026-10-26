@@ -1775,10 +1775,10 @@ index 0000000..602c7f6
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000..c7e8d39
+index 0000000..252875b
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,2389 @@
+@@ -0,0 +1,2585 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -2578,21 +2578,24 @@ index 0000000..c7e8d39
 +}
 +
 +static void add_to_playlist(const char *path, const char *name);   /* below */
++static void remove_from_playlist(const char *path, const char *name);
 +
 +/* the menu itself; name is shown under the title. no_queue: the song is
 + * the one playing (it can go in a playlist, not in the queue) */
 +static int song_menu_ex(const char *path, const char *name, bool no_queue)
 +{
-+    const char *items[3];
-+    int act[3], n = 0;
++    const char *items[4];
++    int act[4], n = 0;
 +    if (path && !no_queue) { items[n] = "Add to Queue"; act[n++] = 1; }
 +    if (path) { items[n] = "Add to Playlist"; act[n++] = 3; }
++    if (path) { items[n] = "Remove from Playlist"; act[n++] = 4; }
 +    if (playlist_queued_ahead() > 0) { items[n] = "Cancel Queue"; act[n++] = 2; }
 +    if (n == 0) return 0;
 +    int r = asher_popup("SONG", name ? name : "", items, n);
 +    if (r < 0) return 0;
 +    if (act[r] == 1) queue_add(path);
 +    else if (act[r] == 3) add_to_playlist(path, name);
++    else if (act[r] == 4) remove_from_playlist(path, name);
 +    else queue_cancel();
 +    return 0;
 +}
@@ -3184,10 +3187,17 @@ index 0000000..c7e8d39
 +static int npls;
 +static bool pl_dirty;             /* a playlist was made or changed on the iPod */
 +
++#define VACANT "Vacant Songs"
++static bool is_vacant(const char *name)          /* "Vacant Songs" or "Vacant Songs.m3u8" */
++{
++    size_t n = strlen(VACANT);
++    return !strncasecmp(name, VACANT, n) && (name[n] == '\0' || name[n] == '.');
++}
 +static int pl_cmp(const void *a, const void *b)
 +{
 +    const struct plent *x = a, *y = b;
 +    if ((x->kind == 'l') != (y->kind == 'l')) return x->kind == 'l' ? 1 : -1;
++    if (is_vacant(x->name) != is_vacant(y->name)) return is_vacant(x->name) ? 1 : -1;
 +    return strnatcasecmp(x->name, y->name);
 +}
 +
@@ -3293,7 +3303,8 @@ index 0000000..c7e8d39
 +        char *e = strrchr(buf, '.');
 +        if (e) *e = '\0';
 +    }
-+    if (sub) strlcpy(sub, pls[i].kind == 'p' ? "Playlist" : "Folder of songs", subn);
++    if (sub) strlcpy(sub, pls[i].kind != 'p' ? "Folder of songs"
++                          : is_vacant(pls[i].name) ? "Songs in no playlist" : "Playlist", subn);
 +}
 +
 +/* ---- the songs inside one playlist (folder, .m3u or loose songs) ---- */
@@ -3546,15 +3557,30 @@ index 0000000..c7e8d39
 +    return begin_play(start < 0 ? 0 : start, start == -1);
 +}
 +
++static char pl_changed[MAX_PATH];  /* playlist file the song menu last changed */
++static bool m3u_has(const char *file, const char *song);
 +static int fs_hold(struct aui_list *l, int i)
 +{
-+    (void)l;
 +    if (i < FS_TOP) return song_menu(NULL, NULL);    /* SHUFFLE / PLAY rows */
 +    char name[80];
 +    fs_title(i - FS_TOP, name, sizeof(name));
 +    static char path[MAX_PATH];
 +    strlcpy(path, FS(i - FS_TOP), sizeof(path));
-+    return song_menu(path, name);
++    pl_changed[0] = '\0';
++    song_menu(path, name);
++    /* 2.6.0: taken out of this playlist (or out of Vacant Songs by adding it
++     * somewhere): it goes from the list straight away */
++    if (pl_changed[0] && open_pl >= 0 && !strcasecmp(pl_changed, pls[open_pl].path)
++        && !m3u_has(pls[open_pl].path, path))
++    {
++        int k = i - FS_TOP;
++        memmove(&fs_e[k], &fs_e[k + 1], (fs_n - k - 1) * sizeof(fs_e[0]));
++        fs_n--;
++        l->count = fs_n + FS_TOP;
++        if (l->sel >= l->count) l->sel = l->count - 1;
++        if (fs_n == 0) return AUI_BACK;
++    }
++    return 0;
 +}
 +static int fs_select(struct aui_list *l, int i)
 +{
@@ -3668,7 +3694,8 @@ index 0000000..c7e8d39
 +    mix_skip = cur[0] ? cur : NULL;
 +    fs_full = false;
 +    for (int i = 0; i < npls; i++)
-+        fs_read_playlist(i);
++        if (!is_vacant(pls[i].name))
++            fs_read_playlist(i);
 +    mix_ctx = NULL;
 +    mix_skip = NULL;
 +    playlist_insert_context_release(&ctx);
@@ -3751,8 +3778,106 @@ index 0000000..c7e8d39
 +    return ok;
 +}
 +
++/* 2.6.0: take the song out of a playlist file (and its #EXTINF line) */
++static bool m3u_remove(const char *file, const char *song)
++{
++    static char line[MAX_PATH], copy[MAX_PATH], full[MAX_PATH], dir[MAX_PATH],
++                tmp[MAX_PATH], hold[MAX_PATH];
++    bool held = false, found = false;
++    m3u_dir(file, dir, sizeof(dir));
++    snprintf(tmp, sizeof(tmp), "%s.tmp", file);
++    int in = open(file, O_RDONLY);
++    if (in < 0) return false;
++    int out = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
++    if (out < 0) { close(in); return false; }
++    while (read_line(in, line, sizeof(line)) > 0)
++    {
++        if (!strncasecmp(line, "#EXTINF", 7))
++        {
++            if (held) { write(out, hold, strlen(hold)); write(out, "\n", 1); }
++            strlcpy(hold, line, sizeof(hold));
++            held = true;
++            continue;
++        }
++        strlcpy(copy, line, sizeof(copy));
++        if (m3u_line(copy, dir, full, sizeof(full)) && !strcasecmp(full, song))
++        {
++            found = true;
++            held = false;                       /* its #EXTINF goes too */
++            continue;
++        }
++        if (held) { write(out, hold, strlen(hold)); write(out, "\n", 1); held = false; }
++        write(out, line, strlen(line));
++        write(out, "\n", 1);
++    }
++    if (held) { write(out, hold, strlen(hold)); write(out, "\n", 1); }
++    close(in);
++    close(out);
++    if (!found) { remove(tmp); return false; }
++    remove(file);
++    rename(tmp, file);
++    return true;
++}
++
++/* does the playlist file still have any songs? */
++static bool m3u_empty(const char *file)
++{
++    static char line[MAX_PATH], full[MAX_PATH], dir[MAX_PATH];
++    bool empty = true;
++    int fd = open(file, O_RDONLY);
++    if (fd < 0) return true;
++    m3u_dir(file, dir, sizeof(dir));
++    while (empty && read_line(fd, line, sizeof(line)) > 0)
++        if (m3u_line(line, dir, full, sizeof(full))) empty = false;
++    close(fd);
++    return empty;
++}
++
++/* the computer's sync needs to know what was taken out on the iPod, or it
++ * would put it back: one "playlist file<TAB>song" line per removal */
++#define REMOVED_LOG "/.rockbox/asher/removed.txt"
++static void log_removed(const char *file, const char *song)
++{
++    const char *b = strrchr(file, '/');
++    int fd = open(REMOVED_LOG, O_WRONLY | O_CREAT | O_APPEND, 0666);
++    if (fd < 0) return;
++    fdprintf(fd, "%s\t%s\n", b ? b + 1 : file, song);
++    close(fd);
++}
++
++static void vacant_file(char *buf, size_t n)
++{
++    pl_find_dirs();
++    snprintf(buf, n, "%s/" VACANT ".m3u8", pl_nfound ? pl_found[0] : PL_DIR);
++}
++/* a song that's in no playlist any more goes to Vacant Songs */
++static void vacant_add(const char *song)
++{
++    static char vf[MAX_PATH];
++    vacant_file(vf, sizeof(vf));
++    if (!file_exists(vf))
++    {
++        int fd = open(vf, O_WRONLY | O_CREAT | O_TRUNC, 0666);
++        if (fd < 0) return;
++        write(fd, "#EXTM3U\n", 8);
++        close(fd);
++    }
++    if (!m3u_has(vf, song)) m3u_append(vf, song);
++    pl_dirty = true;
++}
++/* ...and leaves it when it's put in a playlist again (an empty Vacant Songs goes away) */
++static void vacant_drop(const char *song)
++{
++    static char vf[MAX_PATH];
++    vacant_file(vf, sizeof(vf));
++    if (!file_exists(vf) || !m3u_remove(vf, song)) return;
++    strlcpy(pl_changed, vf, sizeof(pl_changed));
++    if (m3u_empty(vf)) remove(vf);
++    pl_dirty = true;
++}
++
 +/* every playlist file on the iPod (folders of songs can't take more) */
-+static void pk_scan(void)
++static void pk_scan(void)       /* every playlist except Vacant Songs */
 +{
 +    pk_n = 0;
 +    pl_find_dirs();
@@ -3766,6 +3891,7 @@ index 0000000..c7e8d39
 +            if (ent->d_name[0] == '.') continue;
 +            if (dir_get_info(d, ent).attribute & ATTR_DIRECTORY) continue;
 +            if (!has_ext(ent->d_name, pl_exts)) continue;
++            if (is_vacant(ent->d_name)) continue;
 +            struct pkent *e = &pk[pk_n++];
 +            strlcpy(e->name, ent->d_name, sizeof(e->name));
 +            char *dot = strrchr(e->name, '.');
@@ -3806,6 +3932,7 @@ index 0000000..c7e8d39
 +    ok = write(fd, "#EXTM3U\n", 8) == 8;
 +    close(fd);
 +    ok = ok && m3u_append(file, pk_song);
++    if (ok) vacant_drop(pk_song);
 +    pl_dirty = true;
 +    splashf(HZ * 3 / 2, ok ? "Made %s - song added" : "Made %s", name);
 +    pk_scan();
@@ -3847,6 +3974,7 @@ index 0000000..c7e8d39
 +    {
 +        e->has = true;
 +        pl_dirty = true;
++        vacant_drop(pk_song);
 +        splashf(HZ, "Added to %s", e->name);
 +    }
 +    else
@@ -3869,6 +3997,74 @@ index 0000000..c7e8d39
 +    l.get = pk_get; l.select = pk_select; l.style = pk_style;
 +    l.sel = pk_n ? 1 : 0;
 +    music_list_run(&l, WZ_OTHER);
++    aui_end();
++    pk_song = NULL;
++}
++
++/* ------------------------------------------------------------------ */
++/* 2.6.0: Remove from Playlist (hold Play on a song)                   */
++/* ------------------------------------------------------------------ */
++static int rm_idx[PK_MAX], rm_n;
++static void rm_build(void)
++{
++    rm_n = 0;
++    for (int k = 0; k < pk_n; k++)
++        if (pk[k].has) rm_idx[rm_n++] = k;
++}
++static void rm_get(struct aui_list *l, int i, char *buf, size_t n, char *sub, size_t subn)
++{
++    (void)l;
++    strlcpy(buf, pk[rm_idx[i]].name, n);
++    if (sub) strlcpy(sub, "Centre takes the song out", subn);
++}
++static int rm_select(struct aui_list *l, int i)
++{
++    struct pkent *e = &pk[rm_idx[i]];
++    if (!m3u_remove(e->path, pk_song))
++    {
++        splash(2 * HZ, "Couldn't change that playlist");
++        return 0;
++    }
++    log_removed(e->path, pk_song);
++    e->has = false;
++    pl_dirty = true;
++    strlcpy(pl_changed, e->path, sizeof(pl_changed));
++    rm_build();
++    if (rm_n == 0)
++    {
++        vacant_add(pk_song);
++        splashf(HZ * 2, "Removed from %s - it's in " VACANT " now", e->name);
++        return AUI_BACK;
++    }
++    splashf(HZ * 3 / 2, "Removed from %s", e->name);
++    l->count = rm_n;
++    if (l->sel >= rm_n) l->sel = rm_n - 1;
++    return 0;
++}
++static void remove_from_playlist(const char *path, const char *name)
++{
++    static char song[MAX_PATH];
++    (void)name;
++    strlcpy(song, path, sizeof(song));
++    path_tidy(song);
++    pk_song = song;
++    aui_begin();
++    loading_screen("LOADING", NULL);
++    pk_scan();
++    rm_build();
++    if (rm_n == 0)
++        splash(2 * HZ, "That song isn't in any playlist");
++    else
++    {
++        struct aui_list l = { 0 };
++        l.title = "Remove from Playlist"; l.count = rm_n; l.two_line = true;
++        l.get = rm_get; l.select = rm_select;
++        /* looking at a playlist: that one is picked to start with */
++        if (open_pl >= 0)
++            for (int k = 0; k < rm_n; k++)
++                if (!strcasecmp(pk[rm_idx[k]].path, pls[open_pl].path)) { l.sel = k; break; }
++        music_list_run(&l, WZ_OTHER);
++    }
 +    aui_end();
 +    pk_song = NULL;
 +}
@@ -5525,7 +5721,7 @@ index 0000000..b0dca4f
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000..70b0d05
+index 0000000..7c8552d
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,589 @@
@@ -5553,7 +5749,7 @@ index 0000000..70b0d05
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.5.9"
++#define ASHER_OS_VERSION "2.6.0"
 +#if defined(IPOD_VIDEO) && defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
 +#define MODEL_LABEL "iPod Video (5.5 gen)"
 +#elif defined(IPOD_VIDEO)
