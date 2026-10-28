@@ -28,10 +28,10 @@ index bb612b38fb..42addc73b9 100644
  #if CONFIG_TUNER
  menus/radio_menu.c
 diff --git a/apps/action.c b/apps/action.c
-index a9029457f8..d07ba967eb 100644
+index a9029457f8..4f215d2085 100644
 --- a/apps/action.c
 +++ b/apps/action.c
-@@ -1280,6 +1280,30 @@ int get_action(int context, int timeout)
+@@ -1280,6 +1280,31 @@ int get_action(int context, int timeout)
  
      action = do_backlight(&action_last, &current, action);
  
@@ -49,7 +49,8 @@ index a9029457f8..d07ba967eb 100644
 +        if (!in_controls && (c == CONTEXT_SETTINGS || c == CONTEXT_SETTINGS_EQ
 +                             || c == CONTEXT_SETTINGS_TIME
 +                             || c == CONTEXT_SETTINGS_COLOURCHOOSER
-+                             || c == CONTEXT_SETTINGS_RECTRIGGER))
++                             || c == CONTEXT_SETTINGS_RECTRIGGER
++                             || c == CONTEXT_YESNOSCREEN || c == CONTEXT_KEYBOARD))
 +        {
 +            extern void asher_music_mode(void);
 +            in_controls = true;
@@ -618,10 +619,10 @@ index 0000000000..541fe549c4
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
 new file mode 100644
-index 0000000000..e80a3d1d10
+index 0000000000..8753170d40
 --- /dev/null
 +++ b/apps/asher/asher_home.c
-@@ -0,0 +1,312 @@
+@@ -0,0 +1,328 @@
 +/* Asher OS home screen.
 + *  Bubbles / Dark: four glossy bubbles in an even 2x2 grid over the live
 + *  wallpaper. Turning right moves right, then wraps down to the first box
@@ -681,6 +682,7 @@ index 0000000000..e80a3d1d10
 +
 +static void draw_bubbles(int sel)
 +{
++    bool moon = asher_layout == 4 && aui_sprite_w(SPR_P_MUSIC);
 +    aui_background(true);
 +    aui_topbar();
 +    for (int i = 0; i < NITEMS; i++)
@@ -690,11 +692,26 @@ index 0000000000..e80a3d1d10
 +        int top = AUI_BAR + row * ((AUI_H - AUI_BAR) / 2);
 +        int cy = top + 46;
 +        bool s = (i == sel);
++        if (moon)            /* MoonPod: moons, with plain lettering under them */
++        {
++            if (!aui_sprite_c(s ? SPR_P_MUSIC_S + i : SPR_P_MUSIC + i, cx, cy))
++                aui_round(cx - 30, cy - 30, 60, 60, 30, 0xe9e3d3, 0xaaa096);
++            continue;
++        }
 +        if (!aui_sprite_c(s ? SPR_MUSIC_S + i : SPR_MUSIC + i, cx, cy))
 +            aui_round(cx - 34, cy - 34, 68, 68, 34, 0x7b5cff, 0x2f8cff);
 +        aui_sprite_ca(SPR_LBL_MUSIC + i, cx, top + 93, s ? 256 : 190);
 +    }
 +    aui_present();
++    if (moon)
++        for (int i = 0; i < NITEMS; i++)
++        {
++            int cx = (i % 2) ? 234 : 86;
++            int top = AUI_BAR + (i / 2) * ((AUI_H - AUI_BAR) / 2);
++            bool s = i == sel;
++            aui_text(AF_SMALL, cx + 1, top + 87, 0x050408, names[i], 140, 1);
++            aui_text(AF_SMALL, cx, top + 86, s ? 0xffffff : 0xb9a7ff, names[i], 140, 1);
++        }
 +    if (!aui_sprite_w(SPR_MUSIC))
 +    {
 +        /* the picture files aren't on the iPod: say so instead of guessing */
@@ -1506,10 +1523,10 @@ index 0000000000..c3a2e26b61
 +#endif
 diff --git a/apps/asher/asher_mem.c b/apps/asher/asher_mem.c
 new file mode 100644
-index 0000000000..e8c45e0799
+index 0000000000..90cda3ade8
 --- /dev/null
 +++ b/apps/asher/asher_mem.c
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,100 @@
 +/* Asher OS memory reserve.
 + *
 + * Rockbox gives all spare memory to the music buffer. When something asks
@@ -1526,6 +1543,7 @@ index 0000000000..e8c45e0799
 +#include "system.h"
 +#include "core_alloc.h"
 +#include "asher_mem.h"
++#include "audio.h"
 +
 +static int res_h = -1;
 +static size_t res_sz;            /* size of the reserve right now */
@@ -1571,6 +1589,15 @@ index 0000000000..e8c45e0799
 +{
 +    res_drop();
 +    int h = core_alloc(size);
++    if (h <= 0 && audio_status())
++    {
++        /* 2.6.2: the music's memory is off limits now (see playback.c);
++         * let go of what can be loaded again later and try once more */
++        extern void asher_wp_preview_close(void);
++        asher_wp_preview_close();
++        res_drop();
++        h = core_alloc(size);
++    }
 +    if (h > 0)
 +    {
 +        for (int i = 0; i < MAXH; i++)
@@ -1867,10 +1894,10 @@ index 0000000000..602c7f6ed6
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000000..d7bad062ec
+index 0000000000..55efd7dc48
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,2617 @@
+@@ -0,0 +1,2618 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -2473,6 +2500,7 @@ index 0000000000..d7bad062ec
 +                snprintf(msg, sizeof(msg), "Found %d files so far", st->processed_entries);
 +            loading_screen("BUILDING LIBRARY", msg);
 +            int a = get_action(CONTEXT_STD, aui_loading_ticks(LDR_MUSIC));
++            if (a == ACTION_STD_QUICKSCREEN) { asher_music_mode(); continue; }  /* 2.6.2 */
 +            if (a == ACTION_STD_CANCEL || a == ACTION_STD_MENU) { aui_end(); return false; }
 +            if (a != ACTION_NONE) default_event_handler(a);
 +        }
@@ -5845,7 +5873,7 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..a2148d6866
+index 0000000000..025dcc9d28
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,589 @@
@@ -5873,7 +5901,7 @@ index 0000000000..a2148d6866
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.6.1"
++#define ASHER_OS_VERSION "2.6.2"
 +#if defined(IPOD_VIDEO) && defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
 +#define MODEL_LABEL "iPod Video (5.5 gen)"
 +#elif defined(IPOD_VIDEO)
@@ -6832,10 +6860,10 @@ index 0000000000..101fc74b20
 +#endif
 diff --git a/apps/asher/asher_theme.c b/apps/asher/asher_theme.c
 new file mode 100644
-index 0000000000..b2ab7b3cfa
+index 0000000000..7dc86dec0d
 --- /dev/null
 +++ b/apps/asher/asher_theme.c
-@@ -0,0 +1,418 @@
+@@ -0,0 +1,427 @@
 +#include <stdio.h>
 +#include <string.h>
 +#include <fcntl.h>
@@ -6865,16 +6893,17 @@ index 0000000000..b2ab7b3cfa
 +
 +#define ASHER_THEME_DIR "/.rockbox/asher/themes/"
 +#define STATE_FILE      "/.rockbox/asher/state.txt"
-+#define NUM_THEMES 4
++#define NUM_THEMES 5
 +
 +int asher_layout = 0;
 +
-+static const char *theme_file[NUM_THEMES] = { "bubbles", "classic", "dark", "modern" };
-+static const char *theme_name[NUM_THEMES] = { "Retro", "Classic", "Dark", "Modern" };
++static const char *theme_file[NUM_THEMES] = { "bubbles", "classic", "dark", "modern", "moonpod" };
++static const char *theme_name[NUM_THEMES] = { "Retro", "Classic", "Dark", "Modern", "MoonPod" };
 +
 +/* which themes may use a wallpaper: 1 << theme number */
-+#define WT_ALL    0x0f                     /* "Off" */
-+#define WT_OLD    ((1 << 0) | (1 << 1) | (1 << 2))   /* Retro, Classic, Dark */
++#define WT_ALL    0x1f                     /* "Off" */
++#define WT_OLD    ((1 << 0) | (1 << 1) | (1 << 2) | (1 << 4))   /* Retro, Classic, Dark, MoonPod */
++#define WT_MOON   ((1 << 2) | (1 << 4))      /* Dark and MoonPod */
 +#define WT_MODERN ((1 << 2) | (1 << 3))      /* Dark and Modern */
 +struct wpdef { const char *name; const char *scene; bool timed; unsigned char themes; };
 +static const struct wpdef wps[] = {
@@ -6904,6 +6933,7 @@ index 0000000000..b2ab7b3cfa
 +    { "Planets",              "planets",    false, WT_MODERN },
 +    { "Desert Dunes",         "dunes",      false, WT_MODERN },
 +    { "Grey Waves",           "greywaves",  false, WT_MODERN },
++    { "Moon Night",           "moonnight",  false, WT_MOON },
 +    { "Off",                  NULL,         false, WT_ALL },
 +};
 +#define NUM_WPS ((int)(sizeof(wps) / sizeof(wps[0])))
@@ -7091,6 +7121,12 @@ index 0000000000..b2ab7b3cfa
 +        keep_wp = cur_wp;
 +        apply_wallpaper(FIRST_MODERN_WP);
 +    }
++    else if (i == 4 && wp_index("moonnight") >= 0 && cur_theme != 4)
++    {
++        /* MoonPod opens on its own night sky */
++        if (wp_ok(cur_wp, 0)) keep_wp = cur_wp;
++        apply_wallpaper(wp_index("moonnight"));
++    }
 +    else if (!wp_ok(cur_wp, i))
 +        apply_wallpaper(keep_wp >= 0 && wp_ok(keep_wp, i) ? keep_wp : 0);
 +    apply_theme(i);
@@ -7253,7 +7289,8 @@ index 0000000000..b2ab7b3cfa
 +THI(1, "Classic");
 +THI(2, "Dark");
 +THI(3, "Modern");
-+MAKE_MENU(asher_theme_menu, "Theme", NULL, Icon_NOICON, &thi0, &thi1, &thi2, &thi3);
++THI(4, "MoonPod");
++MAKE_MENU(asher_theme_menu, "Theme", NULL, Icon_NOICON, &thi0, &thi1, &thi2, &thi3, &thi4);
 diff --git a/apps/asher/asher_theme.h b/apps/asher/asher_theme.h
 new file mode 100644
 index 0000000000..728fa524c6
@@ -7271,10 +7308,10 @@ index 0000000000..728fa524c6
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..43c680e517
+index 0000000000..097749146d
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,1029 @@
+@@ -0,0 +1,1099 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -7294,6 +7331,7 @@ index 0000000000..43c680e517
 +#include "timefuncs.h"
 +#include "audio.h"
 +#include "playback.h"
++#include "playlist.h"
 +#include "buffering.h"
 +#include "gui/viewport.h"
 +#include "core_alloc.h"
@@ -7324,7 +7362,7 @@ index 0000000000..43c680e517
 +/* ------------------------------------------------------------------ */
 +/* themes                                                              */
 +/* ------------------------------------------------------------------ */
-+static const struct aui_theme themes[4] = {
++static const struct aui_theme themes[5] = {
 +    /* Bubbles */
 +    { false, true,  0x141633, 0x06070e, 0xffffff, 0xaab2d8, 0xb79cff,
 +      0x7b5cff, 0x2f8cff, 0xffffff, 0x1b1e3a, 0x3a3f66, false },
@@ -7337,12 +7375,15 @@ index 0000000000..43c680e517
 +    /* Modern */
 +    { true,  false, 0xf2f2f7, 0xf2f2f7, 0x1c1c1e, 0x8e8e93, 0x007aff,
 +      0x0a84ff, 0x007aff, 0xffffff, 0xffffff, 0xe3e3e8, true },
++    /* MoonPod: night-sky purple and bone white */
++    { false, true,  0x0e0b18, 0x050408, 0xe9e3d3, 0x9d93b8, 0xb9a7ff,
++      0x5b3a93, 0x2a1a4a, 0xffffff, 0x151020, 0x2c2440, false },
 +};
 +
 +const struct aui_theme *aui_theme(void)
 +{
 +    int i = asher_layout;
-+    if (i < 0 || i > 3) i = 0;
++    if (i < 0 || i > 4) i = 0;
 +    return &themes[i];
 +}
 +
@@ -7502,10 +7543,12 @@ index 0000000000..43c680e517
 +    "m_music_s", "m_settings_s", "m_stats_s", "m_play_s",
 +    "m_np_rew", "m_np_prev", "m_np_pause", "m_np_play", "m_np_next", "m_np_ff",
 +    "m_npbg",
++    "p_music", "p_settings", "p_stats", "p_play",
++    "p_music_s", "p_settings_s", "p_stats_s", "p_play_s",
 +};
 +struct spr { int w, h; unsigned char *rgb; unsigned char *a; };
 +static struct spr sprs[SPR_COUNT];
-+static unsigned char spool[1400 * 1024];
++static unsigned char spool[1520 * 1024];
 +static size_t spool_used;
 +
 +static bool load_sprite(int id)
@@ -7674,10 +7717,17 @@ index 0000000000..43c680e517
 +/* loading animations                                                  */
 +/* ------------------------------------------------------------------ */
 +struct anim { int handle, w, h, n, ms; size_t fsz; };
-+static struct anim anims[LDR_COUNT] = { { -1 }, { -1 }, { -1 }, { -1 } };
-+static const char *anim_file[LDR_COUNT] = { "ldr_music", "ldr_stats", "ldr_np", "m_ldr" };
-+static const unsigned anim_bg[LDR_COUNT] = { 0x080a19, 0x000000, 0x1d384d, 0xffffff };
-+static const unsigned anim_fg[LDR_COUNT] = { 0xd9b8ff, 0xffa040, 0x13f08c, 0x1c1c1e };
++static struct anim anims[LDR_COUNT] = { { -1 }, { -1 }, { -1 }, { -1 }, { -1 } };
++static const char *anim_file[LDR_COUNT] = { "ldr_music", "ldr_stats", "ldr_np", "m_ldr", "ldr_moon" };
++static const unsigned anim_bg[LDR_COUNT] = { 0x080a19, 0x000000, 0x1d384d, 0xffffff, 0x0c0914 };
++static const unsigned anim_fg[LDR_COUNT] = { 0xd9b8ff, 0xffa040, 0x13f08c, 0x1c1c1e, 0xe9e3d3 };
++
++/* MoonPod: every loading animation is the moon going through its phases */
++static int ldr_pick(int which)
++{
++    if (asher_layout == 4 && anims[LDR_MOON].handle > 0) return LDR_MOON;
++    return which;
++}
 +
 +static bool load_anim(int i)
 +{
@@ -7708,6 +7758,7 @@ index 0000000000..43c680e517
 +int aui_loading_ticks(int which)
 +{
 +    if (aui_theme()->modern && anims[LDR_MODERN].handle > 0) which = LDR_MODERN;
++    which = ldr_pick(which);
 +    int t = anims[which].handle > 0 ? anims[which].ms * HZ / 1000 : HZ / 5;
 +    return t < 1 ? 1 : t;
 +}
@@ -7775,7 +7826,8 @@ index 0000000000..43c680e517
 +        modern_loading(which == LDR_MUSIC ? NULL : sub, start);
 +        return;
 +    }
-+    struct anim *a = &anims[which];
++    int show = ldr_pick(which);
++    struct anim *a = &anims[show];
 +    int h = a->handle > 0 ? a->h : 0;
 +    int th = text ? aui_font_h(AF_RETRO) + 6 : 0, sh = sub ? aui_font_h(AF_RETRO_S) + 4 : 0;
 +    int avail = AUI_H - AUI_BAR, y, ty;
@@ -7795,7 +7847,7 @@ index 0000000000..43c680e517
 +        y = AUI_BAR;
 +        ty = AUI_H - th - sh - 2;
 +    }
-+    aui_fill(0, 0, AUI_W, AUI_H, anim_bg[which]);
++    aui_fill(0, 0, AUI_W, AUI_H, anim_bg[show]);
 +    if (a->handle > 0)
 +    {
 +        long ms = (long)(current_tick - start) * (1000 / HZ);
@@ -7806,10 +7858,10 @@ index 0000000000..43c680e517
 +                 a->w, a->h, (AUI_W - a->w) / 2, y);
 +    }
 +    if (text && ty < y + h)    /* soften the animation behind the text */
-+        aui_shade(0, ty - 4, AUI_W, AUI_H - ty + 4, 0, 60, anim_bg[which]);
++        aui_shade(0, ty - 4, AUI_W, AUI_H - ty + 4, 0, 60, anim_bg[show]);
 +    aui_topbar();
 +    aui_present();
-+    if (text) aui_text(AF_RETRO, AUI_W / 2, ty, anim_fg[which], text, AUI_W - 16, 1);
++    if (text) aui_text(AF_RETRO, AUI_W / 2, ty, anim_fg[show], text, AUI_W - 16, 1);
 +    if (sub)  aui_text(AF_RETRO_S, AUI_W / 2, ty + th, 0xd0d4ea, sub, AUI_W - 16, 1);
 +    aui_topbar_text("");
 +    aui_update();
@@ -7842,9 +7894,28 @@ index 0000000000..43c680e517
 +{
 +    while (1)
 +    {
-+        sleep(HZ / 25);
++        /* quick while something loads, otherwise a calm 10 times a second
++         * (just enough for the hold switch to feel instant) */
++        sleep(ldr_live ? HZ / 25 : HZ / 10);
 +        if (in_boosted && TIME_AFTER(current_tick, in_until))
 +            { in_boosted = false; cpu_boost(false); }
++#ifdef HAS_BUTTON_HOLD
++        {
++            /* 2.6.2: the hold switch moved: light the screen and redraw at
++             * once, so the padlock appears/disappears right away (it used
++             * to wait for the screen's next timed redraw, or not show at
++             * all while the screen was fading out) */
++            static bool last_hold, hold_known;
++            bool h = button_hold();
++            if (!hold_known) { hold_known = true; last_hold = h; }
++            else if (h != last_hold)
++            {
++                last_hold = h;
++                backlight_on();
++                button_queue_post(BUTTON_REDRAW, 0);
++            }
++        }
++#endif
 +        if (!ldr_live || ldr_in_draw) continue;
 +        if (TIME_AFTER(current_tick, ldr_main_last + 8 * HZ)) { loader_stop(); continue; }
 +        int ft = aui_loading_ticks(ldr_which);
@@ -7911,7 +7982,7 @@ index 0000000000..43c680e517
 +
 +void aui_intro(int which)
 +{
-+    struct anim *a = &anims[which];
++    struct anim *a = &anims[ldr_pick(which)];
 +    long start = current_tick;
 +    long len = a->handle > 0 ? (long)a->n * a->ms * HZ / 1000 + HZ / 6 : 0;
 +    if (aui_theme()->modern) len = HZ / 2;          /* just a quick spin */
@@ -8244,10 +8315,46 @@ index 0000000000..43c680e517
 +    lcd_set_drawmode(DRMODE_SOLID);
 +}
 +
++/* 2.6.2: a song that's "playing" but hasn't moved for a while (the
++ * player got stuck: no sound, the time not moving, new songs won't start)
++ * is restarted where it was, and noted in skips.txt */
++static void playback_watchdog(void)
++{
++    static char path[MAX_PATH];
++    static unsigned long el;
++    static long since;
++    int st = audio_status();
++    struct mp3entry *id3 = audio_current_track();
++    if (!(st & AUDIO_STATUS_PLAY) || (st & AUDIO_STATUS_PAUSE) || !id3 || !id3->path[0])
++        { since = 0; return; }
++    if (!since || strcmp(path, id3->path) || el != id3->elapsed)
++    {
++        strlcpy(path, id3->path, sizeof(path));
++        el = id3->elapsed;
++        since = current_tick;
++        return;
++    }
++    if (TIME_BEFORE(current_tick, since + 10 * HZ)) return;
++    since = 0;
++    struct playlist_info *pl = playlist_get_current();
++    int idx = pl ? pl->index : -1;
++    {
++        extern void asher_skiplog_note(const char *what, const char *path,
++                                       unsigned long el, unsigned long len);
++        asher_skiplog_note("got stuck - restarted it", id3->path, el, id3->length);
++    }
++    audio_stop();
++    if (idx >= 0) playlist_start(idx, el, 0);
++}
++
 +void aui_update(void)
 +{
 +    extern void asher_skiplog_flush(void);
 +    asher_toast_overlay(); lcd_update();
++    /* let the music decode between frames: a screen that redraws fast
++     * (scrolling) must never hold up the sound */
++    yield();
++    if (thread_self() != keeper_tid) playback_watchdog();
 +    if (!(ldr_in_draw && keeper_up && thread_self() == keeper_tid))
 +    {
 +        asher_batt_save_if_due();
@@ -8306,10 +8413,10 @@ index 0000000000..43c680e517
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..4de45a3f61
+index 0000000000..b586ceb6fa
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,112 @@
 +/* Asher OS shared drawing layer.
 + * Screens are composed into an off-screen buffer (aui_fb): wallpaper,
 + * glass panels and alpha-blended sprites. The buffer is then copied to the
@@ -8353,6 +8460,8 @@ index 0000000000..4de45a3f61
 +    SPR_M_MUSIC_S, SPR_M_SETTINGS_S, SPR_M_STATS_S, SPR_M_PLAY_S,   /* Modern, selected */
 +    SPR_M_NP_REW, SPR_M_NP_PREV, SPR_M_NP_PAUSE, SPR_M_NP_PLAY, SPR_M_NP_NEXT, SPR_M_NP_FF,
 +    SPR_M_NPBG,                                             /* Modern Now Playing backdrop */
++    SPR_P_MUSIC, SPR_P_SETTINGS, SPR_P_STATS, SPR_P_PLAY,   /* MoonPod moons */
++    SPR_P_MUSIC_S, SPR_P_SETTINGS_S, SPR_P_STATS_S, SPR_P_PLAY_S,
 +    SPR_COUNT
 +};
 +
@@ -8361,7 +8470,7 @@ index 0000000000..4de45a3f61
 +#define AF_RETRO_T (AF_COUNT + 1)   /* compact 3D lettering (Stats widgets) */
 +
 +/* loading animations */
-+enum { LDR_MUSIC, LDR_STATS, LDR_NP, LDR_MODERN, LDR_COUNT };
++enum { LDR_MUSIC, LDR_STATS, LDR_NP, LDR_MODERN, LDR_MOON, LDR_COUNT };
 +
 +void aui_init(void);                 /* load fonts + sprites (once) */
 +void aui_begin(void);                /* take over the whole screen */
@@ -8417,7 +8526,7 @@ index 0000000000..4de45a3f61
 +bool aui_woke(void);                    /* screen just turned back on? */
 +extern bool aui_dirty;                  /* set to make the screen redraw */
 +extern long aui_quiet_until;
-+#define ASHER_ASSETS_VERSION "2.5"
++#define ASHER_ASSETS_VERSION "2.6"
 +extern bool aui_assets_old;      /* the .rockbox picture files are older than the firmware */            /* skip loading screens until this tick */
 +#endif
 diff --git a/apps/asher/asher_wallpaper.c b/apps/asher/asher_wallpaper.c
@@ -13456,6 +13565,193 @@ index f81c1665a5..1fe2f0f344 100644
          {
              if (global_settings.shortcuts_replaces_qs ||
                  quickscreen_show(action) == QUICKSCREEN_GOTO_SHORTCUTS_MENU)
+diff --git a/apps/menus/eq_menu.c b/apps/menus/eq_menu.c
+index 370f8bcad2..2be4348fc5 100644
+--- a/apps/menus/eq_menu.c
++++ b/apps/menus/eq_menu.c
+@@ -49,6 +49,7 @@
+ #include "pcmbuf.h"
+ #include "option_select.h"
+ #include "string-extra.h"
++#include "splash.h"
+ 
+ static void eq_apply(void);
+ 
+@@ -825,6 +826,173 @@ MENUITEM_FUNCTION_W_PARAM(eq_browse, 0, ID2P(LANG_EQUALIZER_BROWSE),
+                           browse_folder, (void*)&eqs,
+                           lowlatency_callback, Icon_NOICON);
+ 
++
++/* ------------------------------------------------------------------ */
++/* Asher OS 2.6.2: EQ presets                                          */
++/* ------------------------------------------------------------------ */
++/* Each one sets the whole equalizer (and turns it on); Flat turns it
++ * off, which also saves battery. Gains are in tenths of a dB, Q in
++ * tenths, precut (in tenths of a dB) matches the biggest boost so loud
++ * songs never clip. Bands left at 0 dB cost no processing.
++ *
++ * "Asher's Mix" is made for the Kiwi Ears Cadenza and dark, bass-heavy
++ * rap ($uicideboy$, $NOT, Pouya, Xavier Wolf, Key Glock, Young Dolph,
++ * XXXTENTACION): the Cadenza already has a good sub-bass lift but a
++ * slightly sludgy low-mid, a dip around 500 Hz, a hot 3-4 kHz region
++ * and treble that rolls off early. So: more 808 weight down low, a bit
++ * of kick punch, the mud cleaned out, the voice brought forward a touch,
++ * the shout and the hi-hat sizzle smoothed, and air put back on top.
++ * "Cadenza Fix" is just the Cadenza corrections, for any kind of music. */
++struct asher_eqp {
++    const char *name;
++    int precut;
++    struct { int type, cutoff, q, gain; } b[EQ_NUM_BANDS];
++};
++#define LS EQ_FILTER_LOW_SHELF
++#define PK EQ_FILTER_PEAK
++#define HS EQ_FILTER_HIGH_SHELF
++#define FLATB { {LS,32,7,0},{PK,64,10,0},{PK,125,10,0},{PK,250,10,0},{PK,500,10,0}, \
++                {PK,1000,10,0},{PK,2000,10,0},{PK,4000,10,0},{PK,8000,10,0},{HS,16000,7,0} }
++static const struct asher_eqp asher_eqps[] = {
++    { "Flat (EQ off)", 0, FLATB },
++    { "Asher's Mix (Cadenza + Rap)", 45, {
++        {LS,  45, 7,  35}, {PK,  90, 10,  15}, {PK, 250, 12, -20}, {PK, 500, 14,  10},
++        {PK,1500, 10,  10}, {PK,3500, 16, -20}, {PK,6500, 20, -10}, {PK,8000, 10,   0},
++        {PK,9000, 10,   0}, {HS,11500, 7,  20} } },
++    { "Cadenza Fix", 20, {
++        {LS,  32, 7,   0}, {PK, 250, 12, -15}, {PK, 500, 14,  10}, {PK,3800, 18, -20},
++        {PK,6500, 20,  -5}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS,11000, 7,  20} } },
++    { "Hip-Hop", 45, {
++        {LS,  60, 7,  40}, {PK, 120, 10,  10}, {PK, 300, 10, -15}, {PK,2500, 10,  10},
++        {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0}, {PK,8000, 10,   0},
++        {PK, 500, 10,   0}, {HS,12000, 7,  15} } },
++    { "R&B", 45, {
++        {LS,  60, 7,  30}, {PK, 120,  9,  15}, {PK, 400, 10, -10}, {PK,2000, 10,   5},
++        {PK,3500, 14, -10}, {PK,1000, 10,   0}, {PK, 250, 10,   0}, {PK,8000, 10,   0},
++        {PK,4000, 10,   0}, {HS,10000, 7,  15} } },
++    { "Pop", 25, {
++        {LS,  60, 7,  15}, {PK, 250, 10, -10}, {PK,1500, 10,  10}, {PK,3000, 12,  10},
++        {PK, 500, 10,   0}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS,10000, 7,  20} } },
++    { "Rock", 35, {
++        {LS,  60, 7,  30}, {PK, 250, 10, -10}, {PK, 800, 10, -10}, {PK,2500, 12,  10},
++        {PK, 500, 10,   0}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS, 8000, 7,  25} } },
++    { "Electronic", 50, {
++        {LS,  50, 7,  45}, {PK, 120, 10,  10}, {PK, 500, 10, -15}, {PK,6000, 10,  10},
++        {PK, 250, 10,   0}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS,12000, 7,  25} } },
++    { "Jazz", 25, {
++        {LS,  80, 7,  20}, {PK, 250, 10,  10}, {PK,3500, 14, -10}, {PK, 500, 10,   0},
++        {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0}, {PK,8000, 10,   0},
++        {PK, 125, 10,   0}, {HS, 9000, 7,  15} } },
++    { "Classical", 20, {
++        {LS,  80, 7,  15}, {PK,4000, 12, -10}, {PK, 250, 10,   0}, {PK, 500, 10,   0},
++        {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK, 125, 10,   0}, {PK,8000, 10,   0},
++        {PK,  64, 10,   0}, {HS,10000, 7,  20} } },
++    { "Acoustic", 25, {
++        {LS, 100, 7,  10}, {PK, 250, 10,  10}, {PK,3000, 12,   5}, {PK, 500, 10,   0},
++        {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0}, {PK,8000, 10,   0},
++        {PK, 125, 10,   0}, {HS,10000, 7,  20} } },
++    { "Vocal Booster", 30, {
++        {LS, 100, 7, -20}, {PK, 300, 10, -10}, {PK,1500,  9,  20}, {PK,3000, 12,  15},
++        {PK,6000, 20, -10}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS,16000, 7,   0} } },
++    { "Bass Booster", 60, {
++        {LS,  80, 7,  60}, {PK, 200, 10, -10}, {PK, 125, 10,   0}, {PK, 250, 10,   0},
++        {PK, 500, 10,   0}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS,16000, 7,   0} } },
++    { "Bass Reducer", 0, {
++        {LS, 120, 7, -50}, {PK,  64, 10,   0}, {PK, 125, 10,   0}, {PK, 250, 10,   0},
++        {PK, 500, 10,   0}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS,16000, 7,   0} } },
++    { "Treble Booster", 50, {
++        {LS,  32, 7,   0}, {PK,  64, 10,   0}, {PK, 125, 10,   0}, {PK, 250, 10,   0},
++        {PK, 500, 10,   0}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS, 6000, 7,  50} } },
++    { "Treble Reducer", 0, {
++        {LS,  32, 7,   0}, {PK,  64, 10,   0}, {PK, 125, 10,   0}, {PK, 250, 10,   0},
++        {PK, 500, 10,   0}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS, 6000, 7, -50} } },
++    { "Loudness (Quiet Listening)", 40, {
++        {LS,  60, 7,  40}, {PK,  64, 10,   0}, {PK, 125, 10,   0}, {PK, 250, 10,   0},
++        {PK, 500, 10,   0}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS,10000, 7,  30} } },
++    { "Small Speakers", 25, {
++        {LS, 120, 7, -40}, {PK, 200, 10,  20}, {PK,1500, 10,  20}, {PK,4000, 12,  15},
++        {PK, 500, 10,   0}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK, 250, 10,   0},
++        {PK,8000, 10,   0}, {HS,10000, 7,  10} } },
++    { "Spoken Word", 20, {
++        {LS, 100, 7, -60}, {PK,2500, 10,  20}, {PK,6000, 16, -20}, {PK, 250, 10,   0},
++        {PK, 500, 10,   0}, {PK,1000, 10,   0}, {PK,2000, 10,   0}, {PK,4000, 10,   0},
++        {PK,8000, 10,   0}, {HS,16000, 7,   0} } },
++};
++#undef LS
++#undef PK
++#undef HS
++#define ASHER_NEQP ((int)(sizeof(asher_eqps) / sizeof(asher_eqps[0])))
++
++/* which preset is set now (-1: something you changed yourself) */
++static int asher_eqp_current(void)
++{
++    for (int p = 0; p < ASHER_NEQP; p++)
++    {
++        const struct asher_eqp *e = &asher_eqps[p];
++        if (p == 0) { if (!global_settings.eq_enabled) return 0; continue; }
++        if (!global_settings.eq_enabled || (int)global_settings.eq_precut != e->precut)
++            continue;
++        bool same = true;
++        for (int i = 0; i < EQ_NUM_BANDS && same; i++)
++        {
++            const struct eq_band_setting *g = &global_settings.eq_band_settings[i];
++            same = g->cutoff == e->b[i].cutoff && g->q == e->b[i].q && g->gain == e->b[i].gain;
++        }
++        if (same) return p;
++    }
++    return -1;
++}
++
++static int asher_eqp_pick(void *param)
++{
++    int p = (int)(intptr_t)param;
++    const struct asher_eqp *e = &asher_eqps[p];
++    if (p == 0)
++        global_settings.eq_enabled = false;
++    else
++    {
++        global_settings.eq_enabled = true;
++        global_settings.eq_precut = e->precut;
++        for (int i = 0; i < EQ_NUM_BANDS; i++)
++        {
++            struct eq_band_setting *g = &global_settings.eq_band_settings[i];
++            g->type = e->b[i].type; g->cutoff = e->b[i].cutoff;
++            g->q = e->b[i].q; g->gain = e->b[i].gain;
++        }
++    }
++    eq_apply();
++    settings_save();
++    splashf(HZ / 2, "EQ: %s", e->name);
++    return 0;
++}
++
++static char *asher_eqp_text(int sel, void *data, char *buf, size_t n)
++{
++    (void)sel;
++    int p = (int)(intptr_t)data;
++    snprintf(buf, n, "%s%s", asher_eqps[p].name, asher_eqp_current() == p ? "\x01" : "");
++    return buf;
++}
++
++#define EQP(i) MENUITEM_FUNCTION_DYNTEXT_W_PARAM(eqp##i, MENU_FUNC_USEPARAM, \
++        asher_eqp_pick, (void *)(intptr_t)(i), asher_eqp_text, NULL, \
++        (void *)(intptr_t)(i), NULL, Icon_NOICON)
++EQP(0); EQP(1); EQP(2); EQP(3); EQP(4); EQP(5); EQP(6); EQP(7); EQP(8); EQP(9);
++EQP(10); EQP(11); EQP(12); EQP(13); EQP(14); EQP(15); EQP(16); EQP(17); EQP(18);
++MAKE_MENU(asher_eq_presets, "EQ Presets", NULL, Icon_EQ,
++          &eqp0, &eqp1, &eqp2, &eqp3, &eqp4, &eqp5, &eqp6, &eqp7, &eqp8, &eqp9,
++          &eqp10, &eqp11, &eqp12, &eqp13, &eqp14, &eqp15, &eqp16, &eqp17, &eqp18);
++
+ MAKE_MENU(equalizer_menu, ID2P(LANG_EQUALIZER), NULL, Icon_EQ,
+-        &eq_enable, &eq_graphical, &eq_precut, &gain_menu,
++        &asher_eq_presets, &eq_enable, &eq_graphical, &eq_precut, &gain_menu,
+         &advanced_menu, &eq_save, &eq_browse, &eq_reset);
 diff --git a/apps/menus/main_menu.c b/apps/menus/main_menu.c
 index a09d81de3d..7ee8305987 100644
 --- a/apps/menus/main_menu.c
@@ -13525,7 +13821,7 @@ index a09d81de3d..7ee8305987 100644
  /*    MAIN MENU                    */
  /***********************************/
 diff --git a/apps/menus/sound_menu.c b/apps/menus/sound_menu.c
-index 61d16f4cb1..6f41f4bf04 100644
+index 61d16f4cb1..2f84c6388f 100644
 --- a/apps/menus/sound_menu.c
 +++ b/apps/menus/sound_menu.c
 @@ -36,6 +36,8 @@
@@ -13537,7 +13833,7 @@ index 61d16f4cb1..6f41f4bf04 100644
  
  static const char* vol_limit_format(char* buffer, size_t buffer_size, int value,
                        const char* unit)
-@@ -231,9 +233,8 @@ static int timestretch_callback(int action,
+@@ -231,9 +233,10 @@ static int timestretch_callback(int action,
  #ifdef AUDIOHW_HAVE_EQ
  #endif /* AUDIOHW_HAVE_EQ */
  
@@ -13545,11 +13841,13 @@ index 61d16f4cb1..6f41f4bf04 100644
 -          &volume
 -          ,&volume_limit
 +/* Asher OS: the sound menu in groups, and a reset at the bottom */
++extern const struct menu_item_ex asher_eq_presets;
 +MAKE_MENU(asher_tone_menu, "Bass, Treble & EQ", NULL, Icon_NOICON
++          ,&asher_eq_presets
  #ifdef AUDIOHW_HAVE_BASS
            ,&bass
  #endif
-@@ -249,6 +250,9 @@ MAKE_MENU(sound_settings, ID2P(LANG_SOUND_SETTINGS), NULL, Icon_Audio,
+@@ -249,6 +252,9 @@ MAKE_MENU(sound_settings, ID2P(LANG_SOUND_SETTINGS), NULL, Icon_Audio,
  #ifdef AUDIOHW_HAVE_EQ
            ,&audiohw_eq_tone_controls
  #endif
@@ -13559,7 +13857,7 @@ index 61d16f4cb1..6f41f4bf04 100644
            ,&balance,&channel_config,&stereo_width
  #ifdef AUDIOHW_HAVE_DEPTH_3D
            ,&depth_3d
-@@ -262,13 +266,62 @@ MAKE_MENU(sound_settings, ID2P(LANG_SOUND_SETTINGS), NULL, Icon_Audio,
+@@ -262,13 +268,62 @@ MAKE_MENU(sound_settings, ID2P(LANG_SOUND_SETTINGS), NULL, Icon_Audio,
  #ifdef AUDIOHW_HAVE_POWER_MODE
            ,&power_mode
  #endif
@@ -13725,7 +14023,7 @@ index 983fbc92f3..c6e5b55f3f 100644
          last_button = button;
      else
 diff --git a/apps/playback.c b/apps/playback.c
-index d69b28cd2c..d250626ea5 100644
+index d69b28cd2c..cabf6616bc 100644
 --- a/apps/playback.c
 +++ b/apps/playback.c
 @@ -66,6 +66,9 @@
@@ -13738,7 +14036,32 @@ index d69b28cd2c..d250626ea5 100644
  
  #if defined(USB_ENABLE_AUDIO) || defined(HAVE_HOST_USB_AUDIO)
  #ifdef USB_ENABLE_AUDIO
-@@ -1080,7 +1083,21 @@ static void audio_reset_buffer(void)
+@@ -959,6 +962,8 @@ bufpanic:
+     panicf("%s(): EOM (%zu > %zu)", __func__, allocsize, filebuflen);
+ }
+ 
++bool asher_audio_shrink_ok;      /* see shrink_callback */
++
+ /* Buffer must not move. */
+ static int shrink_callback(int handle, unsigned hints, void* start, size_t old_size)
+ {
+@@ -980,6 +985,15 @@ static int shrink_callback(int handle, unsigned hints, void* start, size_t old_s
+     size_t wanted_size = (hints & BUFLIB_SHRINK_SIZE_MASK);
+     ssize_t size = (ssize_t)old_size - wanted_size;
+ 
++    /* Asher OS 2.6.2: the music comes first. While a song is loaded
++     * (playing or paused) nothing else may take memory from it: shrinking
++     * the buffer stops and restarts the song, a gap of a second or so, and
++     * it comes back a few seconds further on. The other allocation fails
++     * instead (Asher OS copes with that); only stopping the music, or a
++     * deliberate audio_allow_shrink, lets the buffer move. */
++    if (play_status != PLAY_STOPPED && !asher_audio_shrink_ok)
++        return BUFLIB_CB_CANNOT_SHRINK;
++
+     if ((size - extradata_size) < AUDIO_BUFFER_RESERVE)
+     {
+         /* check if buflib needs the memory really hard. if yes we give
+@@ -1080,7 +1094,21 @@ static void audio_reset_buffer(void)
      }
      if (core_allocatable() < pcmbuf_size_reqd())
          talk_buffer_set_policy(TALK_BUFFER_LOOSE); /* back off voice buffer */
@@ -13760,7 +14083,7 @@ index d69b28cd2c..d250626ea5 100644
  
      if (audiobuf_handle > 0)
          audio_reset_buffer_noalloc(core_get_data(audiobuf_handle));
-@@ -2915,6 +2932,34 @@ static bool audio_can_change_track(int *trackstat, enum pcm_track_change_type *t
+@@ -2915,6 +2943,46 @@ static bool audio_can_change_track(int *trackstat, enum pcm_track_change_type *t
  
  /* Codec has completed decoding the track
     (usually Q_AUDIO_CODEC_COMPLETE) */
@@ -13770,6 +14093,17 @@ index d69b28cd2c..d250626ea5 100644
 +#define ASK_N 4
 +static struct { char path[MAX_PATH]; unsigned long el, len; int st; } ask[ASK_N];
 +static volatile unsigned ask_w, ask_r;
++
++static char ask_what[ASK_N][32];
++void asher_skiplog_note(const char *what, const char *path, unsigned long el, unsigned long len)
++{
++    if (ask_w - ask_r >= ASK_N) return;
++    unsigned i = ask_w % ASK_N;
++    strlcpy(ask[i].path, path, sizeof(ask[i].path));
++    strlcpy(ask_what[i], what, sizeof(ask_what[i]));
++    ask[i].el = el; ask[i].len = len; ask[i].st = 2;
++    ask_w++;
++}
 +
 +void asher_skiplog_flush(void)
 +{
@@ -13785,7 +14119,8 @@ index d69b28cd2c..d250626ea5 100644
 +                     t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min,
 +                     ask[i].el / 60000, ask[i].el / 1000 % 60,
 +                     ask[i].len / 60000, ask[i].len / 1000 % 60,
-+                     ask[i].st ? "couldn't play the rest" : "data ran out", ask[i].path);
++                     ask[i].st == 2 ? ask_what[i] : ask[i].st ? "couldn't play the rest"
++                                                               : "data ran out", ask[i].path);
 +        }
 +        ask_r++;
 +    }
@@ -13795,7 +14130,7 @@ index d69b28cd2c..d250626ea5 100644
  static void audio_on_codec_complete(int status)
  {
      logf("%s(%d)", __func__, status);
-@@ -2922,6 +2967,20 @@ static void audio_on_codec_complete(int status)
+@@ -2922,6 +2990,20 @@ static void audio_on_codec_complete(int status)
      if (play_status == PLAY_STOPPED)
          return;
  
@@ -14727,6 +15062,24 @@ index 781434e07b..a6b02061ac 100644
  #if (defined(HAVE_REMOTE_LCD_AS_MAIN) && defined(HAS_REMOTE_BUTTON_HOLD))
          && remote_button_hold()
  #elif defined(HAS_BUTTON_HOLD)
+diff --git a/firmware/drivers/ata.c b/firmware/drivers/ata.c
+index 2244a03a0d..1f5c01c576 100644
+--- a/firmware/drivers/ata.c
++++ b/firmware/drivers/ata.c
+@@ -680,7 +680,12 @@ void ata_sleepnow(void)
+                 ata_state = ATA_SLEEPING;
+ #ifdef HAVE_ATA_POWER_OFF
+                 if (ata_disk_can_sleep() || canflush) {
+-                    power_off_tick = current_tick + ATA_POWER_OFF_TIMEOUT;
++                    /* Asher OS 2.6.2: flash storage (iFlash) wakes in no
++                     * time if it's left powered a little longer, so
++                     * browsing doesn't wait for it to start up again after
++                     * every pause; it still switches off when left alone */
++                    power_off_tick = current_tick + (ata_disk_isssd() ? 20 * HZ
++                                                     : ATA_POWER_OFF_TIMEOUT);
+                 }
+ #endif
+             }
 diff --git a/firmware/drivers/button_queue.c b/firmware/drivers/button_queue.c
 index 3c6dd9ed74..89390982b4 100644
 --- a/firmware/drivers/button_queue.c
