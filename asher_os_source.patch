@@ -1,5 +1,5 @@
 diff --git a/apps/SOURCES b/apps/SOURCES
-index bb612b3..42addc7 100644
+index bb612b38fb..42addc73b9 100644
 --- a/apps/SOURCES
 +++ b/apps/SOURCES
 @@ -20,6 +20,24 @@ menu.c
@@ -27,9 +27,44 @@ index bb612b3..42addc7 100644
  menus/plugin_menu.c
  #if CONFIG_TUNER
  menus/radio_menu.c
+diff --git a/apps/action.c b/apps/action.c
+index a9029457f8..d07ba967eb 100644
+--- a/apps/action.c
++++ b/apps/action.c
+@@ -1280,6 +1280,30 @@ int get_action(int context, int timeout)
+ 
+     action = do_backlight(&action_last, &current, action);
+ 
++    {
++        extern void asher_ui_input(int action);
++        asher_ui_input(action);        /* full speed for a moment after a press */
++    }
++
++    /* Asher OS 2.6.1: hold Menu = music controls on the remaining
++     * setting screens that aren't lists (Time & Date, EQ, colours) */
++    if (action == ACTION_STD_QUICKSCREEN)
++    {
++        static bool in_controls;
++        int c = context & ~ALLOW_SOFTLOCK;
++        if (!in_controls && (c == CONTEXT_SETTINGS || c == CONTEXT_SETTINGS_EQ
++                             || c == CONTEXT_SETTINGS_TIME
++                             || c == CONTEXT_SETTINGS_COLOURCHOOSER
++                             || c == CONTEXT_SETTINGS_RECTRIGGER))
++        {
++            extern void asher_music_mode(void);
++            in_controls = true;
++            asher_music_mode();
++            in_controls = false;
++            action = ACTION_REDRAW;
++        }
++    }
++
+     return action;
+ }
+ 
 diff --git a/apps/asher/asher_boot.c b/apps/asher/asher_boot.c
 new file mode 100644
-index 0000000..fc5dce5
+index 0000000000..fc5dce5a48
 --- /dev/null
 +++ b/apps/asher/asher_boot.c
 @@ -0,0 +1,166 @@
@@ -201,7 +236,7 @@ index 0000000..fc5dce5
 +}
 diff --git a/apps/asher/asher_boot.h b/apps/asher/asher_boot.h
 new file mode 100644
-index 0000000..376fc9b
+index 0000000000..376fc9b636
 --- /dev/null
 +++ b/apps/asher/asher_boot.h
 @@ -0,0 +1,6 @@
@@ -213,7 +248,7 @@ index 0000000..376fc9b
 +#endif
 diff --git a/apps/asher/asher_check.h b/apps/asher/asher_check.h
 new file mode 100644
-index 0000000..7aed25e
+index 0000000000..7aed25e428
 --- /dev/null
 +++ b/apps/asher/asher_check.h
 @@ -0,0 +1,27 @@
@@ -246,7 +281,7 @@ index 0000000..7aed25e
 +#endif
 diff --git a/apps/asher/asher_font3d.c b/apps/asher/asher_font3d.c
 new file mode 100644
-index 0000000..06c6387
+index 0000000000..06c63876a7
 --- /dev/null
 +++ b/apps/asher/asher_font3d.c
 @@ -0,0 +1,306 @@
@@ -558,7 +593,7 @@ index 0000000..06c6387
 +}
 diff --git a/apps/asher/asher_font3d.h b/apps/asher/asher_font3d.h
 new file mode 100644
-index 0000000..541fe54
+index 0000000000..541fe549c4
 --- /dev/null
 +++ b/apps/asher/asher_font3d.h
 @@ -0,0 +1,19 @@
@@ -583,7 +618,7 @@ index 0000000..541fe54
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
 new file mode 100644
-index 0000000..e80a3d1
+index 0000000000..e80a3d1d10
 --- /dev/null
 +++ b/apps/asher/asher_home.c
 @@ -0,0 +1,312 @@
@@ -901,7 +936,7 @@ index 0000000..e80a3d1
 +}
 diff --git a/apps/asher/asher_home.h b/apps/asher/asher_home.h
 new file mode 100644
-index 0000000..0f36b5c
+index 0000000000..0f36b5cbaa
 --- /dev/null
 +++ b/apps/asher/asher_home.h
 @@ -0,0 +1,6 @@
@@ -913,7 +948,7 @@ index 0000000..0f36b5c
 +#endif
 diff --git a/apps/asher/asher_list.c b/apps/asher/asher_list.c
 new file mode 100644
-index 0000000..d396c34
+index 0000000000..d396c34886
 --- /dev/null
 +++ b/apps/asher/asher_list.c
 @@ -0,0 +1,310 @@
@@ -1229,7 +1264,7 @@ index 0000000..d396c34
 +}
 diff --git a/apps/asher/asher_list.h b/apps/asher/asher_list.h
 new file mode 100644
-index 0000000..3156836
+index 0000000000..3156836e43
 --- /dev/null
 +++ b/apps/asher/asher_list.h
 @@ -0,0 +1,37 @@
@@ -1272,10 +1307,10 @@ index 0000000..3156836
 +#endif
 diff --git a/apps/asher/asher_media.c b/apps/asher/asher_media.c
 new file mode 100644
-index 0000000..e106814
+index 0000000000..2449ba12bc
 --- /dev/null
 +++ b/apps/asher/asher_media.c
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,167 @@
 +/* Asher OS music controls shared by several screens. */
 +#include "config.h"
 +#include "system.h"
@@ -1286,6 +1321,8 @@ index 0000000..e106814
 +#include "misc.h"
 +#include "settings.h"
 +#include "playlist.h"
++#include "string-extra.h"
++#include <string.h>
 +#include "gui/wps.h"
 +#include "asher_music.h"
 +#include "asher_media.h"
@@ -1318,6 +1355,52 @@ index 0000000..e106814
 +    }
 +}
 +
++/* 2.6.1: what a screen should show as "playing". Right after a skip the
++ * player briefly reports the old song again before the new one starts,
++ * so the screen flicked new -> old -> new. For a few seconds after a skip
++ * the song being skipped to is shown instead, until it really starts. */
++static struct mp3entry skip_to;
++static char skip_from[MAX_PATH];
++static long skip_until;
++
++static void skip_note(const char *from)
++{
++    struct mp3entry *id3 = audio_current_track();
++    if (!id3 || !from[0] || !strcmp(id3->path, from)) { skip_until = 0; return; }
++    copy_mp3entry(&skip_to, id3);
++    skip_to.elapsed = 0;
++    strlcpy(skip_from, from, sizeof(skip_from));
++    skip_until = current_tick + 3 * HZ;
++}
++
++struct mp3entry *asher_track(void)
++{
++    struct mp3entry *id3 = audio_current_track();
++    if (skip_until)
++    {
++        if (!TIME_BEFORE(current_tick, skip_until) || !id3
++            || !strcmp(id3->path, skip_to.path))
++            skip_until = 0;                       /* it's started (or gave up) */
++        else if (!strcmp(id3->path, skip_from))
++            return &skip_to;                      /* old song flashing back */
++    }
++    return id3;
++}
++
++bool asher_skipping(void)
++{
++    return skip_until && TIME_BEFORE(current_tick, skip_until);
++}
++
++static void skip_track(bool next)
++{
++    static char from[MAX_PATH];
++    struct mp3entry *id3 = audio_current_track();
++    strlcpy(from, id3 ? id3->path : "", sizeof(from));
++    if (next) audio_next(); else audio_prev();
++    skip_note(from);
++}
++
 +bool asher_media_show_vol(const struct amedia *m)
 +{
 +    return m->vol_until && TIME_BEFORE(current_tick, m->vol_until);
@@ -1333,7 +1416,7 @@ index 0000000..e106814
 +            play_pause();
 +            return true;
 +        case ACTION_WPS_SKIPNEXT:
-+            if (st) audio_next();
++            if (st) skip_track(true);
 +            return true;
 +        case ACTION_WPS_SKIPPREV:
 +            if (!st) return true;
@@ -1343,7 +1426,7 @@ index 0000000..e106814
 +                audio_ff_rewind(0);
 +            }
 +            else
-+                audio_prev();
++                skip_track(false);
 +            return true;
 +        case ACTION_WPS_SEEKFWD:
 +        case ACTION_WPS_SEEKBACK:
@@ -1355,10 +1438,15 @@ index 0000000..e106814
 +                audio_pre_ff_rewind();
 +                m->seeking = true;
 +                m->seek_pos = id3->elapsed;
-+                m->step = 1000 * MAX(1, global_settings.ff_rewind_min_step);
++                m->step = 10000;                 /* 2.6.1: always 10 seconds */
++                m->next_step = 0;
 +            }
++            /* a steady 10 seconds about every third of a second, however
++             * long it's held (it used to speed up) */
++            if (m->next_step && TIME_BEFORE(current_tick, m->next_step))
++                return true;
++            m->next_step = current_tick + HZ * 3 / 10;
 +            m->seek_pos += dir * m->step;
-+            m->step += m->step >> 3;
 +            if (m->seek_pos < 0) m->seek_pos = 0;
 +            if (id3 && m->seek_pos > (long)id3->length) m->seek_pos = id3->length;
 +            return true;
@@ -1392,10 +1480,10 @@ index 0000000..e106814
 +}
 diff --git a/apps/asher/asher_media.h b/apps/asher/asher_media.h
 new file mode 100644
-index 0000000..212c2e8
+index 0000000000..c3a2e26b61
 --- /dev/null
 +++ b/apps/asher/asher_media.h
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,20 @@
 +#ifndef ASHER_MEDIA_H
 +#define ASHER_MEDIA_H
 +#include <stdbool.h>
@@ -1405,16 +1493,20 @@ index 0000000..212c2e8
 +    bool seeking;
 +    long seek_pos, step;
 +    long vol_until;          /* show the volume until this tick */
++    long next_step;          /* seeking: when the next 10 s step may happen */
 +};
 +bool asher_media(struct amedia *m, int action);   /* true = it was a music action */
 +bool asher_media_show_vol(const struct amedia *m);
 +/* ticks until the song's time shows the next second (so a clock on screen
 + * steps exactly once a second); a second when nothing is playing */
 +long asher_ticks_to_next_second(void);
++/* the song a screen should show as playing (steady across skips) */
++struct mp3entry *asher_track(void);
++bool asher_skipping(void);          /* a skip is still settling */
 +#endif
 diff --git a/apps/asher/asher_mem.c b/apps/asher/asher_mem.c
 new file mode 100644
-index 0000000..e8c45e0
+index 0000000000..e8c45e0799
 --- /dev/null
 +++ b/apps/asher/asher_mem.c
 @@ -0,0 +1,90 @@
@@ -1510,7 +1602,7 @@ index 0000000..e8c45e0
 +}
 diff --git a/apps/asher/asher_mem.h b/apps/asher/asher_mem.h
 new file mode 100644
-index 0000000..303fd28
+index 0000000000..303fd28d90
 --- /dev/null
 +++ b/apps/asher/asher_mem.h
 @@ -0,0 +1,12 @@
@@ -1528,7 +1620,7 @@ index 0000000..303fd28
 +#endif
 diff --git a/apps/asher/asher_model.c b/apps/asher/asher_model.c
 new file mode 100644
-index 0000000..2d95516
+index 0000000000..2d95516292
 --- /dev/null
 +++ b/apps/asher/asher_model.c
 @@ -0,0 +1,227 @@
@@ -1761,7 +1853,7 @@ index 0000000..2d95516
 +const char *asher_model_serial(void) { detect(); return m_serial; }
 diff --git a/apps/asher/asher_model.h b/apps/asher/asher_model.h
 new file mode 100644
-index 0000000..602c7f6
+index 0000000000..602c7f6ed6
 --- /dev/null
 +++ b/apps/asher/asher_model.h
 @@ -0,0 +1,8 @@
@@ -1775,10 +1867,10 @@ index 0000000..602c7f6
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000..252875b
+index 0000000000..d7bad062ec
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,2585 @@
+@@ -0,0 +1,2617 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -1808,6 +1900,7 @@ index 0000000..252875b
 +#include "asher_prefs.h"
 +#include "asher_check.h"
 +#include "asher_quick.h"
++#include "asher_media.h"
 +#include "gui/wps.h"
 +#include "playback.h"
 +#ifdef HAVE_DIRCACHE
@@ -2026,7 +2119,7 @@ index 0000000..252875b
 +{
 +    long t0 = current_tick;
 +    while (TIME_BEFORE(current_tick, t0 + HZ * 4)
-+           && (TIME_BEFORE(current_tick, t0 + HZ * 7 / 10) || !audio_current_track()))
++           && (TIME_BEFORE(current_tick, t0 + HZ * 3 / 10) || !audio_current_track()))
 +    {
 +        loading_tick("LOADING", NULL);
 +        sleep(1);
@@ -2105,6 +2198,7 @@ index 0000000..252875b
 +
 +/* start the current playlist at 'start'; honours the Shuffle setting.
 + * force_shuffle: shuffle everything (the Shuffle item) */
++static bool keep_order;     /* the list is already in play order: don't reshuffle */
 +static int begin_play(int start, bool force_shuffle)
 +{
 +    if (force_shuffle && !global_settings.playlist_shuffle)
@@ -2117,11 +2211,12 @@ index 0000000..252875b
 +        asher_shufmode = SHUF_SONGS;
 +        asher_prefs_save();
 +    }
-+    if (global_settings.playlist_shuffle)
++    if (global_settings.playlist_shuffle && !keep_order)
 +    {
 +        int r = playlist_shuffle(current_tick, force_shuffle ? -1 : start);
 +        start = force_shuffle ? 0 : r;
 +    }
++    keep_order = false;
 +    asher_queue_unstarted = false;
 +    if (qk_front)
 +    {
@@ -3533,6 +3628,35 @@ index 0000000..252875b
 +        || playlist_insert_context_create(NULL, &ctx, PLAYLIST_INSERT_LAST, false, false) < 0)
 +        { aui_end(); splash(2 * HZ, "Couldn't load those songs"); return 0; }
 +    int cap = queue_cap();
++    /* 2.6.1: a song picked with Shuffle on. The songs above it go first, in
++     * the playlist's order, so Back from the picked song walks up the
++     * playlist to its first song. Going forward from the picked song, every
++     * other song then plays once, shuffled (the ones above come round
++     * again as part of that shuffle). */
++    static short order[FS_MAX];
++    bool own_order = start > 0 && global_settings.playlist_shuffle
++                     && fs_n + start <= cap && fs_n <= FS_MAX;
++    if (own_order)
++    {
++        int m = 0;
++        for (int k = 0; k < fs_n; k++)
++            if (k != start) order[m++] = k;
++        srand(current_tick);
++        for (int k = m - 1; k > 0; k--)
++        {
++            int j = rand() % (k + 1);
++            short t = order[k]; order[k] = order[j]; order[j] = t;
++        }
++        bool ok = true;
++        for (int k = 0; k <= start && ok; k++)           /* above, then the pick */
++            ok = playlist_insert_context_add(&ctx, FS(k)) >= 0;
++        for (int k = 0; k < m && ok; k++)                /* everything else, mixed */
++        {
++            ok = playlist_insert_context_add(&ctx, FS(order[k])) >= 0;
++            if ((k & 15) == 0) loading_tick("LOADING", NULL);
++        }
++    }
++    else
 +    for (int k = 0; k < fs_n && k < cap; k++)
 +    {
 +        if (playlist_insert_context_add(&ctx, FS(k)) < 0)
@@ -3554,6 +3678,7 @@ index 0000000..252875b
 +        if (asher_shufmode != SHUF_OFF) { asher_shufmode = SHUF_OFF; asher_prefs_save(); }
 +        return begin_play(0, false);
 +    }
++    if (own_order) keep_order = true;     /* already in the order to play */
 +    return begin_play(start < 0 ? 0 : start, start == -1);
 +}
 +
@@ -4099,13 +4224,12 @@ index 0000000..252875b
 +    buf[0] = 0;
 +    if (queued) *queued = false;
 +    if (!pl->started || pl->amount <= 1 || pl->index < 0) return false;
++    if (asher_skipping()) return false;      /* 2.6.1: mid-skip, it'd be stale */
 +    int idx = pl->index + 1;
-+    if (idx >= pl->amount)
-+    {
-+        if (global_settings.repeat_mode != REPEAT_ALL
-+            && global_settings.repeat_mode != REPEAT_SHUFFLE) return false;
-+        idx = 0;
-+    }
++    bool rep = global_settings.repeat_mode == REPEAT_ALL
++               || global_settings.repeat_mode == REPEAT_SHUFFLE;
++    if (idx >= pl->amount) idx = 0;           /* the list goes round from its start point */
++    if (!rep && idx == playlist_get_first_index(pl)) return false;
 +    if (queued) *queued = playlist_is_queued_ahead(1);
 +    /* the same answer as last time while nothing moved (Now Playing asks
 +     * every second; this keeps the hard drive out of it) */
@@ -4317,7 +4441,7 @@ index 0000000..252875b
 +    long t0 = current_tick;
 +    if (!aui_screen_on()) return;
 +    load_last = 0; load_start = 0;
-+    while (TIME_BEFORE(current_tick, t0 + HZ * 6 / 5))
++    while (TIME_BEFORE(current_tick, t0 + HZ / 2))
 +    {
 +        loading_tick("LOADING", NULL);
 +        if (get_action(CONTEXT_STD, 1) != ACTION_NONE) break;   /* any button skips */
@@ -4366,7 +4490,7 @@ index 0000000..252875b
 +                  library_rebuild, NULL, Icon_NOICON);
 diff --git a/apps/asher/asher_music.h b/apps/asher/asher_music.h
 new file mode 100644
-index 0000000..5835081
+index 0000000000..5835081571
 --- /dev/null
 +++ b/apps/asher/asher_music.h
 @@ -0,0 +1,18 @@
@@ -4390,7 +4514,7 @@ index 0000000..5835081
 +#endif
 diff --git a/apps/asher/asher_nowplaying.c b/apps/asher/asher_nowplaying.c
 new file mode 100644
-index 0000000..737ca19
+index 0000000000..c785a2d74f
 --- /dev/null
 +++ b/apps/asher/asher_nowplaying.c
 @@ -0,0 +1,472 @@
@@ -4594,7 +4718,7 @@ index 0000000..737ca19
 + * player bar look: red progress with a knob, grey buttons under it */
 +static void draw_modern(const struct amedia *m, bool show_shuf)
 +{
-+    struct mp3entry *id3 = audio_current_track();
++    struct mp3entry *id3 = asher_track();
 +    int st = audio_status();
 +    bool playing = (st & AUDIO_STATUS_PLAY) && id3;
 +    bool paused = st & AUDIO_STATUS_PAUSE;
@@ -4681,7 +4805,7 @@ index 0000000..737ca19
 +static void draw(const struct amedia *m, bool show_shuf)
 +{
 +    const struct aui_theme *t = aui_theme();
-+    struct mp3entry *id3 = audio_current_track();
++    struct mp3entry *id3 = asher_track();
 +    int st = audio_status();
 +    bool playing = (st & AUDIO_STATUS_PLAY) && id3;
 +    bool paused = st & AUDIO_STATUS_PAUSE;
@@ -4868,7 +4992,7 @@ index 0000000..737ca19
 +}
 diff --git a/apps/asher/asher_power.c b/apps/asher/asher_power.c
 new file mode 100644
-index 0000000..bc67bfd
+index 0000000000..bc67bfdc64
 --- /dev/null
 +++ b/apps/asher/asher_power.c
 @@ -0,0 +1,301 @@
@@ -5175,7 +5299,7 @@ index 0000000..bc67bfd
 +}
 diff --git a/apps/asher/asher_power.h b/apps/asher/asher_power.h
 new file mode 100644
-index 0000000..1599b35
+index 0000000000..1599b35384
 --- /dev/null
 +++ b/apps/asher/asher_power.h
 @@ -0,0 +1,7 @@
@@ -5188,7 +5312,7 @@ index 0000000..1599b35
 +#endif
 diff --git a/apps/asher/asher_prefs.c b/apps/asher/asher_prefs.c
 new file mode 100644
-index 0000000..957d1b7
+index 0000000000..957d1b7184
 --- /dev/null
 +++ b/apps/asher/asher_prefs.c
 @@ -0,0 +1,154 @@
@@ -5348,7 +5472,7 @@ index 0000000..957d1b7
 +}
 diff --git a/apps/asher/asher_prefs.h b/apps/asher/asher_prefs.h
 new file mode 100644
-index 0000000..8ff3b02
+index 0000000000..8ff3b022d0
 --- /dev/null
 +++ b/apps/asher/asher_prefs.h
 @@ -0,0 +1,24 @@
@@ -5378,7 +5502,7 @@ index 0000000..8ff3b02
 +#endif
 diff --git a/apps/asher/asher_quick.c b/apps/asher/asher_quick.c
 new file mode 100644
-index 0000000..611989c
+index 0000000000..37f5498e14
 --- /dev/null
 +++ b/apps/asher/asher_quick.c
 @@ -0,0 +1,324 @@
@@ -5458,7 +5582,7 @@ index 0000000..611989c
 +/* ------------------------------------------------------------------ */
 +static void mm_draw(const struct amedia *m)
 +{
-+    struct mp3entry *id3 = audio_current_track();
++    struct mp3entry *id3 = asher_track();
 +    int st = audio_status();
 +    bool playing = (st & AUDIO_STATUS_PLAY) && id3;
 +    unsigned fg, sub;
@@ -5708,7 +5832,7 @@ index 0000000..611989c
 +}
 diff --git a/apps/asher/asher_quick.h b/apps/asher/asher_quick.h
 new file mode 100644
-index 0000000..b0dca4f
+index 0000000000..b0dca4f355
 --- /dev/null
 +++ b/apps/asher/asher_quick.h
 @@ -0,0 +1,7 @@
@@ -5721,7 +5845,7 @@ index 0000000..b0dca4f
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000..7c8552d
+index 0000000000..a2148d6866
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,589 @@
@@ -5749,7 +5873,7 @@ index 0000000..7c8552d
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.6.0"
++#define ASHER_OS_VERSION "2.6.1"
 +#if defined(IPOD_VIDEO) && defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
 +#define MODEL_LABEL "iPod Video (5.5 gen)"
 +#elif defined(IPOD_VIDEO)
@@ -6316,7 +6440,7 @@ index 0000000..7c8552d
 +#endif
 diff --git a/apps/asher/asher_settings.h b/apps/asher/asher_settings.h
 new file mode 100644
-index 0000000..5349121
+index 0000000000..5349121a88
 --- /dev/null
 +++ b/apps/asher/asher_settings.h
 @@ -0,0 +1,12 @@
@@ -6334,7 +6458,7 @@ index 0000000..5349121
 +#endif
 diff --git a/apps/asher/asher_stats.c b/apps/asher/asher_stats.c
 new file mode 100644
-index 0000000..2ae4375
+index 0000000000..aaf5261e42
 --- /dev/null
 +++ b/apps/asher/asher_stats.c
 @@ -0,0 +1,358 @@
@@ -6430,7 +6554,7 @@ index 0000000..2ae4375
 +
 +static void draw_modern(const struct amedia *m)
 +{
-+    struct mp3entry *id3 = audio_current_track();
++    struct mp3entry *id3 = asher_track();
 +    int st = audio_status();
 +    bool playing = (st & AUDIO_STATUS_PLAY) && id3;
 +    bool paused = st & AUDIO_STATUS_PAUSE;
@@ -6541,7 +6665,7 @@ index 0000000..2ae4375
 +static void draw(const struct amedia *m)
 +{
 +    if (aui_theme()->modern) { draw_modern(m); return; }
-+    struct mp3entry *id3 = audio_current_track();
++    struct mp3entry *id3 = asher_track();
 +    int st = audio_status();
 +    bool playing = (st & AUDIO_STATUS_PLAY) && id3;
 +    bool paused = st & AUDIO_STATUS_PAUSE;
@@ -6698,7 +6822,7 @@ index 0000000..2ae4375
 +}
 diff --git a/apps/asher/asher_stats.h b/apps/asher/asher_stats.h
 new file mode 100644
-index 0000000..101fc74
+index 0000000000..101fc74b20
 --- /dev/null
 +++ b/apps/asher/asher_stats.h
 @@ -0,0 +1,4 @@
@@ -6708,7 +6832,7 @@ index 0000000..101fc74
 +#endif
 diff --git a/apps/asher/asher_theme.c b/apps/asher/asher_theme.c
 new file mode 100644
-index 0000000..b2ab7b3
+index 0000000000..b2ab7b3cfa
 --- /dev/null
 +++ b/apps/asher/asher_theme.c
 @@ -0,0 +1,418 @@
@@ -7132,7 +7256,7 @@ index 0000000..b2ab7b3
 +MAKE_MENU(asher_theme_menu, "Theme", NULL, Icon_NOICON, &thi0, &thi1, &thi2, &thi3);
 diff --git a/apps/asher/asher_theme.h b/apps/asher/asher_theme.h
 new file mode 100644
-index 0000000..728fa52
+index 0000000000..728fa524c6
 --- /dev/null
 +++ b/apps/asher/asher_theme.h
 @@ -0,0 +1,9 @@
@@ -7147,10 +7271,10 @@ index 0000000..728fa52
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000..bbe0860
+index 0000000000..43c680e517
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,914 @@
+@@ -0,0 +1,1029 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -7181,6 +7305,11 @@ index 0000000..bbe0860
 +#include "asher_boot.h"
 +#include "asher_theme.h"
 +#include "asher_wallpaper.h"
++#include "thread.h"
++/* 2.6.1 loading keeper (see below) */
++static volatile bool ldr_live, ldr_in_draw;
++static void loader_check(void);
++static void keeper_start(void);
 +
 +#if LCD_PIXELFORMAT != RGB565
 +#error "Asher OS UI expects an RGB565 screen"
@@ -7259,6 +7388,7 @@ index 0000000..bbe0860
 +/* ------------------------------------------------------------------ */
 +void aui_fill(int x, int y, int w, int h, unsigned rgb)
 +{
++    loader_check();
 +    aui_round(x, y, w, h, 0, rgb, rgb);
 +}
 +
@@ -7299,6 +7429,7 @@ index 0000000..bbe0860
 +
 +void aui_blit(const fb_data *src, int sw, int sh, int x, int y)
 +{
++    loader_check();
 +    for (int j = 0; j < sh; j++)
 +    {
 +        int yy = y + j;
@@ -7499,6 +7630,7 @@ index 0000000..bbe0860
 +    asher_mem_init(18 * 1024 * 1024);
 +#endif
 +    asher_wp_set_loading_cb(wp_loading_cb);
++    keeper_start();
 +#ifdef HAVE_ALBUMART
 +    if (aa_slot < 0)
 +    {
@@ -7625,7 +7757,7 @@ index 0000000..bbe0860
 +    aui_update();
 +}
 +
-+void aui_loading(int which, const char *text, const char *sub, long start, bool once)
++static void loading_draw(int which, const char *text, const char *sub, long start, bool once)
 +{
 +    /* a screen you opened is still loading: don't let the screen time out
 +     * meanwhile (only these loading screens do this, not background work) */
@@ -7683,12 +7815,108 @@ index 0000000..bbe0860
 +    aui_update();
 +}
 +
++
++/* ------------------------------------------------------------------ */
++/* 2.6.1: loading animations that keep moving, and a faster feel        */
++/* ------------------------------------------------------------------ */
++/* While a screen loads, the work it does (reading files, the library)
++ * used to hold up the animation, so it froze. A small helper thread now
++ * keeps the animation going whenever the loading work is waiting on the
++ * drive. The processor also runs at full speed while something loads and
++ * for a moment after each button press, so menus open quicker. */
++static int ldr_which;
++static char ldr_text[48], ldr_sub[80];
++static bool ldr_has_text, ldr_has_sub, ldr_boosted, in_boosted, keeper_up;
++static long ldr_start, ldr_last, ldr_main_last, in_until;
++static long keeper_stack[(DEFAULT_STACK_SIZE * 2) / sizeof(long)];
++static unsigned int keeper_tid;
++
++static void loader_stop(void)
++{
++    if (!ldr_live) return;
++    ldr_live = false;
++    if (ldr_boosted) { ldr_boosted = false; cpu_boost(false); }
++}
++
++static void keeper_thread(void)
++{
++    while (1)
++    {
++        sleep(HZ / 25);
++        if (in_boosted && TIME_AFTER(current_tick, in_until))
++            { in_boosted = false; cpu_boost(false); }
++        if (!ldr_live || ldr_in_draw) continue;
++        if (TIME_AFTER(current_tick, ldr_main_last + 8 * HZ)) { loader_stop(); continue; }
++        int ft = aui_loading_ticks(ldr_which);
++        if (TIME_BEFORE(current_tick, ldr_last + 2 * ft)) continue;   /* it's drawing itself */
++        if (!aui_screen_on()) continue;
++        ldr_in_draw = true;
++        loading_draw(ldr_which, ldr_has_text ? ldr_text : NULL,
++                     ldr_has_sub ? ldr_sub : NULL, ldr_start, false);
++        ldr_in_draw = false;
++        ldr_last = current_tick;
++    }
++}
++
++static void keeper_start(void)
++{
++    if (keeper_up) return;
++    keeper_up = true;
++    keeper_tid = create_thread(keeper_thread, keeper_stack, sizeof(keeper_stack), 0,
++                  "asher keeper" IF_PRIO(, PRIORITY_USER_INTERFACE) IF_COP(, CPU));
++    if (!keeper_tid) keeper_up = false;      /* no room for it: no boosting either */
++}
++
++/* something on screen that isn't the loading animation is being drawn */
++static void loader_check(void)
++{
++    if (ldr_live && !ldr_in_draw) loader_stop();
++}
++
++/* every button press (see action.c) */
++void asher_ui_input(int action)
++{
++    if (!keeper_up || action == ACTION_NONE || action == ACTION_REDRAW) return;
++    if (IS_SYSEVENT(action)) return;
++    in_until = current_tick + 2 * HZ;
++    if (!in_boosted) { in_boosted = true; cpu_boost(true); }
++    /* the screen is taking input but not drawing the loader: it's done */
++    if (ldr_live && TIME_AFTER(current_tick, ldr_main_last + HZ)) loader_stop();
++}
++
++void aui_loading(int which, const char *text, const char *sub, long start, bool once)
++{
++    if (!once)
++    {
++        ldr_which = which;
++        ldr_has_text = text != NULL;
++        ldr_has_sub = sub != NULL;
++        if (text) strlcpy(ldr_text, text, sizeof(ldr_text));
++        if (sub) strlcpy(ldr_sub, sub, sizeof(ldr_sub));
++        ldr_start = start;
++        ldr_main_last = current_tick;
++        if (!ldr_live)
++        {
++            ldr_live = true;
++            if (!ldr_boosted) { ldr_boosted = true; cpu_boost(true); }
++        }
++    }
++    bool was = ldr_in_draw;
++    ldr_in_draw = true;
++    loading_draw(which, text, sub, start, once);
++    ldr_in_draw = was;
++    ldr_last = current_tick;
++    if (once) loader_stop();
++}
++
 +void aui_intro(int which)
 +{
 +    struct anim *a = &anims[which];
 +    long start = current_tick;
 +    long len = a->handle > 0 ? (long)a->n * a->ms * HZ / 1000 + HZ / 6 : 0;
 +    if (aui_theme()->modern) len = HZ / 2;          /* just a quick spin */
++    /* 2.6.1: screens open quicker: the intro is just a short flourish */
++    if (len > HZ * 2 / 5) len = HZ * 2 / 5;
 +    if (aui_quiet_until && TIME_BEFORE(current_tick, aui_quiet_until)) return;
 +    if (len <= 0 || !aui_screen_on()) return;
 +    while (TIME_BEFORE(current_tick, start + len))
@@ -7945,6 +8173,7 @@ index 0000000..bbe0860
 +
 +void aui_end(void)
 +{
++    loader_stop();
 +    if (aui_depth > 0) aui_depth--;
 +    lcd_set_viewport(NULL);
 +    lcd_set_drawmode(DRMODE_SOLID);
@@ -7957,6 +8186,7 @@ index 0000000..bbe0860
 +
 +void aui_present(void)
 +{
++    loader_check();
 +    lcd_set_viewport(NULL);
 +    lcd_bitmap(aui_fb, 0, 0, AUI_W, AUI_H);
 +    asher_boot_release();     /* first screen after boot is up: bar allowed again */
@@ -8014,7 +8244,16 @@ index 0000000..bbe0860
 +    lcd_set_drawmode(DRMODE_SOLID);
 +}
 +
-+void aui_update(void) { asher_toast_overlay(); lcd_update(); asher_batt_save_if_due(); }
++void aui_update(void)
++{
++    extern void asher_skiplog_flush(void);
++    asher_toast_overlay(); lcd_update();
++    if (!(ldr_in_draw && keeper_up && thread_self() == keeper_tid))
++    {
++        asher_batt_save_if_due();
++        asher_skiplog_flush();
++    }
++}
 +void aui_update_rect(int x, int y, int w, int h) { lcd_update_rect(x, y, w, h); }
 +
 +/* ------------------------------------------------------------------ */
@@ -8067,7 +8306,7 @@ index 0000000..bbe0860
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000..4de45a3
+index 0000000000..4de45a3f61
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
 @@ -0,0 +1,110 @@
@@ -8183,7 +8422,7 @@ index 0000000..4de45a3
 +#endif
 diff --git a/apps/asher/asher_wallpaper.c b/apps/asher/asher_wallpaper.c
 new file mode 100644
-index 0000000..e5e7c3a
+index 0000000000..e5e7c3a43f
 --- /dev/null
 +++ b/apps/asher/asher_wallpaper.c
 @@ -0,0 +1,289 @@
@@ -8478,7 +8717,7 @@ index 0000000..e5e7c3a
 +}
 diff --git a/apps/asher/asher_wallpaper.h b/apps/asher/asher_wallpaper.h
 new file mode 100644
-index 0000000..b58a05d
+index 0000000000..b58a05db32
 --- /dev/null
 +++ b/apps/asher/asher_wallpaper.h
 @@ -0,0 +1,35 @@
@@ -8519,7 +8758,7 @@ index 0000000..b58a05d
 +#endif
 diff --git a/apps/asher/moonphase.c b/apps/asher/moonphase.c
 new file mode 100644
-index 0000000..3308c53
+index 0000000000..3308c53781
 --- /dev/null
 +++ b/apps/asher/moonphase.c
 @@ -0,0 +1,47 @@
@@ -8572,7 +8811,7 @@ index 0000000..3308c53
 +}
 diff --git a/apps/asher/moonphase.h b/apps/asher/moonphase.h
 new file mode 100644
-index 0000000..b49aed0
+index 0000000000..b49aed02f4
 --- /dev/null
 +++ b/apps/asher/moonphase.h
 @@ -0,0 +1,9 @@
@@ -8587,7 +8826,7 @@ index 0000000..b49aed0
 +#endif
 diff --git a/apps/asher/moontab.inc b/apps/asher/moontab.inc
 new file mode 100644
-index 0000000..e28dd7b
+index 0000000000..e28dd7b005
 --- /dev/null
 +++ b/apps/asher/moontab.inc
 @@ -0,0 +1,179 @@
@@ -8771,7 +9010,7 @@ index 0000000..e28dd7b
 +    43961214, 44001067, 44041840, 44088269, 44131394, 44170123,
 +};
 diff --git a/apps/bitmaps/native/SOURCES b/apps/bitmaps/native/SOURCES
-index 9812851..eb549d4 100644
+index 9812851388..eb549d4538 100644
 --- a/apps/bitmaps/native/SOURCES
 +++ b/apps/bitmaps/native/SOURCES
 @@ -59,6 +59,16 @@ toolsicon.130x130x16.bmp
@@ -12328,7 +12567,7 @@ literal 0
 HcmV?d00001
 
 diff --git a/apps/debug_menu.c b/apps/debug_menu.c
-index c98d54a..8f3e244 100644
+index c98d54ad64..8f3e244662 100644
 --- a/apps/debug_menu.c
 +++ b/apps/debug_menu.c
 @@ -2815,7 +2815,7 @@ static bool view_ram_info(void)
@@ -12341,7 +12580,7 @@ index c98d54a..8f3e244 100644
      struct sysinfo sys_info;
      if (sysinfo(&sys_info) == 0) {
 diff --git a/apps/gui/bitmap/list.c b/apps/gui/bitmap/list.c
-index c2e8896..391389a 100644
+index c2e8896a3e..391389a290 100644
 --- a/apps/gui/bitmap/list.c
 +++ b/apps/gui/bitmap/list.c
 @@ -350,6 +350,20 @@ void list_draw(struct screen *display, struct gui_synclist *list)
@@ -12395,10 +12634,18 @@ index c2e8896..391389a 100644
      display->set_viewport(last_vp);
  }
 diff --git a/apps/gui/list.c b/apps/gui/list.c
-index 12f17ce..f0af5ca 100644
+index 12f17cefef..eace53c15f 100644
 --- a/apps/gui/list.c
 +++ b/apps/gui/list.c
-@@ -119,7 +119,8 @@ void list_init_item_height(struct gui_synclist *list, enum screen_type screen)
+@@ -39,6 +39,7 @@
+ #include "viewport.h"
+ #include "appevents.h"
+ #include "statusbar-skinned.h"
++#include "asher/asher_quick.h"
+ 
+ /* The minimum number of pending button events in queue before starting
+  * to limit list drawing interval.
+@@ -119,7 +120,8 @@ void list_init_item_height(struct gui_synclist *list, enum screen_type screen)
      else
          list->line_height[screen] = line_height + global_settings.list_line_padding;
  #else
@@ -12408,8 +12655,23 @@ index 12f17ce..f0af5ca 100644
  #endif
  }
  
+@@ -662,6 +664,14 @@ bool gui_synclist_do_button(struct gui_synclist * lists, int *actionptr)
+             gui_synclist_draw(lists);
+             return true;
+ 
++        /* Asher OS 2.6.1: hold Menu = music controls on every list in
++         * Settings, including Rockbox's own setting pickers (Sound
++         * Settings > Volume, Bass, ...), which used to ignore it */
++        case ACTION_STD_QUICKSCREEN:
++            asher_music_mode();
++            gui_synclist_draw(lists);
++            return true;
++
+ #ifdef SIMULATOR /* BUGFIX sim doesn't scroll lists from other threads */
+         case ACTION_NONE:
+         {
 diff --git a/apps/gui/option_select.c b/apps/gui/option_select.c
-index d70af4d..7669263 100644
+index d70af4d042..766926395a 100644
 --- a/apps/gui/option_select.c
 +++ b/apps/gui/option_select.c
 @@ -385,13 +385,24 @@ static int selection_to_val(const struct settings_list *setting, int selection)
@@ -12447,7 +12709,7 @@ index d70af4d..7669263 100644
      gui_synclist_select_item(&lists, selected);
  
 diff --git a/apps/gui/skin_engine/skin_display.c b/apps/gui/skin_engine/skin_display.c
-index f2435fe..ceeff76 100644
+index f2435fe709..ceeff76d5b 100644
 --- a/apps/gui/skin_engine/skin_display.c
 +++ b/apps/gui/skin_engine/skin_display.c
 @@ -68,6 +68,15 @@
@@ -12498,7 +12760,7 @@ index f2435fe..ceeff76 100644
  
      /* the held peak of a peak meter bar: a block hold_size pixels thick
 diff --git a/apps/gui/skin_engine/skin_engine.c b/apps/gui/skin_engine/skin_engine.c
-index e382fb6..ce3d6bd 100644
+index e382fb65c0..ce3d6bd2fe 100644
 --- a/apps/gui/skin_engine/skin_engine.c
 +++ b/apps/gui/skin_engine/skin_engine.c
 @@ -166,7 +166,17 @@ void settings_apply_skins(void)
@@ -12521,7 +12783,7 @@ index e382fb6..ce3d6bd 100644
  
      bool first_run = skin_backdrop_init();
 diff --git a/apps/gui/splash.c b/apps/gui/splash.c
-index 4401649..5b11efd 100644
+index 440164984b..5b11efd34a 100644
 --- a/apps/gui/splash.c
 +++ b/apps/gui/splash.c
 @@ -33,6 +33,10 @@
@@ -12630,7 +12892,7 @@ index 4401649..5b11efd 100644
      {
          struct screen * screen = &(screens[i]);
 diff --git a/apps/gui/usb_screen.c b/apps/gui/usb_screen.c
-index b1a12d2..d12626f 100644
+index b1a12d2d83..d12626fbe7 100644
 --- a/apps/gui/usb_screen.c
 +++ b/apps/gui/usb_screen.c
 @@ -43,6 +43,98 @@
@@ -13022,7 +13284,7 @@ index b1a12d2..d12626f 100644
      FOR_NB_SCREENS(i)
      {
 diff --git a/apps/gui/usb_screen.h b/apps/gui/usb_screen.h
-index ca0f181..7f39962 100644
+index ca0f181611..7f39962914 100644
 --- a/apps/gui/usb_screen.h
 +++ b/apps/gui/usb_screen.h
 @@ -24,8 +24,10 @@
@@ -13037,7 +13299,7 @@ index ca0f181..7f39962 100644
  
  #endif
 diff --git a/apps/gui/viewport.c b/apps/gui/viewport.c
-index 5f5703b..1fafee1 100644
+index 5f5703bf54..1fafee1800 100644
 --- a/apps/gui/viewport.c
 +++ b/apps/gui/viewport.c
 @@ -232,9 +232,15 @@ void viewportmanager_init(void)
@@ -13060,7 +13322,7 @@ index 5f5703b..1fafee1 100644
      add_event(GUI_EVENT_ACTIONUPDATE, viewportmanager_update);
  }
 diff --git a/apps/iap/iap-lingo4.c b/apps/iap/iap-lingo4.c
-index d29f4d1..16504e8 100644
+index d29f4d1612..16504e8791 100644
 --- a/apps/iap/iap-lingo4.c
 +++ b/apps/iap/iap-lingo4.c
 @@ -1038,7 +1038,7 @@ void iap_handlepkt_mode4(const unsigned int len, const unsigned char *buf)
@@ -13073,7 +13335,7 @@ index d29f4d1..16504e8 100644
              if (fd >= 0) {
                  read_line(fd, ipod_name, sizeof(ipod_name));
 diff --git a/apps/keymaps/keymap-ipod.c b/apps/keymaps/keymap-ipod.c
-index 787d930..d523b55 100644
+index 787d930468..d523b55cba 100644
 --- a/apps/keymaps/keymap-ipod.c
 +++ b/apps/keymaps/keymap-ipod.c
 @@ -50,7 +50,8 @@ static const struct button_mapping button_context_standard[]  = {
@@ -13087,7 +13349,7 @@ index 787d930..d523b55 100644
      LAST_ITEM_IN_LIST
  }; /* button_context_standard */
 diff --git a/apps/lang/english.lang b/apps/lang/english.lang
-index 112c4d9..8b7ff4d 100644
+index 112c4d9257..8b7ff4d209 100644
 --- a/apps/lang/english.lang
 +++ b/apps/lang/english.lang
 @@ -92,13 +92,13 @@
@@ -13125,7 +13387,7 @@ index 112c4d9..8b7ff4d 100644
  </phrase>
  <phrase>
 diff --git a/apps/main.c b/apps/main.c
-index 38bc189..0fe78c8 100644
+index 38bc18925a..0fe78c8d15 100644
 --- a/apps/main.c
 +++ b/apps/main.c
 @@ -1,3 +1,5 @@
@@ -13167,7 +13429,7 @@ index 38bc189..0fe78c8 100644
  
  #ifdef CPU_PP
 diff --git a/apps/menu.c b/apps/menu.c
-index f81c166..1fe2f0f 100644
+index f81c1665a5..1fe2f0f344 100644
 --- a/apps/menu.c
 +++ b/apps/menu.c
 @@ -32,6 +32,7 @@
@@ -13195,7 +13457,7 @@ index f81c166..1fe2f0f 100644
              if (global_settings.shortcuts_replaces_qs ||
                  quickscreen_show(action) == QUICKSCREEN_GOTO_SHORTCUTS_MENU)
 diff --git a/apps/menus/main_menu.c b/apps/menus/main_menu.c
-index a09d81d..7ee8305 100644
+index a09d81de3d..7ee8305987 100644
 --- a/apps/menus/main_menu.c
 +++ b/apps/menus/main_menu.c
 @@ -26,6 +26,9 @@
@@ -13263,7 +13525,7 @@ index a09d81d..7ee8305 100644
  /*    MAIN MENU                    */
  /***********************************/
 diff --git a/apps/menus/sound_menu.c b/apps/menus/sound_menu.c
-index 61d16f4..6f41f4b 100644
+index 61d16f4cb1..6f41f4bf04 100644
 --- a/apps/menus/sound_menu.c
 +++ b/apps/menus/sound_menu.c
 @@ -36,6 +36,8 @@
@@ -13364,7 +13626,7 @@ index 61d16f4..6f41f4b 100644
 +          ,&asher_sound_reset_item
           );
 diff --git a/apps/misc.c b/apps/misc.c
-index 983fbc9..c6e5b55 100644
+index 983fbc92f3..c6e5b55f3f 100644
 --- a/apps/misc.c
 +++ b/apps/misc.c
 @@ -25,6 +25,7 @@
@@ -13463,10 +13725,20 @@ index 983fbc9..c6e5b55 100644
          last_button = button;
      else
 diff --git a/apps/playback.c b/apps/playback.c
-index d69b28c..690d99f 100644
+index d69b28cd2c..d250626ea5 100644
 --- a/apps/playback.c
 +++ b/apps/playback.c
-@@ -1080,7 +1080,21 @@ static void audio_reset_buffer(void)
+@@ -66,6 +66,9 @@
+ #if defined(SIMULATOR) || defined(SDLAPP)
+ #include <strings.h>  /* For strncasecmp() */
+ #endif
++#include "timefuncs.h"
++#include "file.h"
++#include "string-extra.h"
+ 
+ #if defined(USB_ENABLE_AUDIO) || defined(HAVE_HOST_USB_AUDIO)
+ #ifdef USB_ENABLE_AUDIO
+@@ -1080,7 +1083,21 @@ static void audio_reset_buffer(void)
      }
      if (core_allocatable() < pcmbuf_size_reqd())
          talk_buffer_set_policy(TALK_BUFFER_LOOSE); /* back off voice buffer */
@@ -13488,8 +13760,64 @@ index d69b28c..690d99f 100644
  
      if (audiobuf_handle > 0)
          audio_reset_buffer_noalloc(core_get_data(audiobuf_handle));
+@@ -2915,6 +2932,34 @@ static bool audio_can_change_track(int *trackstat, enum pcm_track_change_type *t
+ 
+ /* Codec has completed decoding the track
+    (usually Q_AUDIO_CODEC_COMPLETE) */
++/* Asher OS 2.6.1: songs that end early (a read or decode problem) are
++ * noted here and written to /.rockbox/asher/skips.txt by the UI, so a
++ * "random skip" can be traced to the file that caused it */
++#define ASK_N 4
++static struct { char path[MAX_PATH]; unsigned long el, len; int st; } ask[ASK_N];
++static volatile unsigned ask_w, ask_r;
++
++void asher_skiplog_flush(void)
++{
++    if (ask_r == ask_w) return;
++    int fd = open("/.rockbox/asher/skips.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
++    while (ask_r != ask_w)
++    {
++        unsigned i = ask_r % ASK_N;
++        if (fd >= 0)
++        {
++            struct tm *t = get_time();
++            fdprintf(fd, "%04d-%02d-%02d %02d:%02d  ended at %lu:%02lu of %lu:%02lu  (%s)  %s\n",
++                     t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min,
++                     ask[i].el / 60000, ask[i].el / 1000 % 60,
++                     ask[i].len / 60000, ask[i].len / 1000 % 60,
++                     ask[i].st ? "couldn't play the rest" : "data ran out", ask[i].path);
++        }
++        ask_r++;
++    }
++    if (fd >= 0) close(fd);
++}
++
+ static void audio_on_codec_complete(int status)
+ {
+     logf("%s(%d)", __func__, status);
+@@ -2922,6 +2967,20 @@ static void audio_on_codec_complete(int status)
+     if (play_status == PLAY_STOPPED)
+         return;
+ 
++    {
++        struct mp3entry *id3 = audio_current_track();
++        if (id3 && id3->length && (status != 0 || id3->elapsed + 10000 < id3->length)
++            && ask_w - ask_r < ASK_N)
++        {
++            unsigned i = ask_w % ASK_N;
++            strlcpy(ask[i].path, id3->path, sizeof(ask[i].path));
++            ask[i].el = id3->elapsed;
++            ask[i].len = id3->length;
++            ask[i].st = status;
++            ask_w++;
++        }
++    }
++
+     /* If it didn't notify us first, don't expect "seek complete" message
+        since the codec can't post it now - do things like it would have
+        done */
 diff --git a/apps/playlist.c b/apps/playlist.c
-index 430a2ca..8ffd8d6 100644
+index 430a2ca117..8ffd8d63e5 100644
 --- a/apps/playlist.c
 +++ b/apps/playlist.c
 @@ -4174,3 +4174,55 @@ error:
@@ -13549,7 +13877,7 @@ index 430a2ca..8ffd8d6 100644
 +    return removed;
 +}
 diff --git a/apps/playlist.h b/apps/playlist.h
-index a906221..579f8ef 100644
+index a906221664..579f8efa12 100644
 --- a/apps/playlist.h
 +++ b/apps/playlist.h
 @@ -186,5 +186,11 @@ int playlist_directory_tracksearch(const char* dirname, bool recurse,
@@ -13565,7 +13893,7 @@ index a906221..579f8ef 100644
  
  #endif /* __PLAYLIST_H__ */
 diff --git a/apps/plugins/battery_bench.c b/apps/plugins/battery_bench.c
-index 5a129c6..8e66ac6 100644
+index 5a129c6136..8e66ac6512 100644
 --- a/apps/plugins/battery_bench.c
 +++ b/apps/plugins/battery_bench.c
 @@ -693,7 +693,7 @@ enum plugin_status plugin_start(const void* parameter)
@@ -13587,7 +13915,7 @@ index 5a129c6..8e66ac6 100644
          rb->close(fd);
      }
 diff --git a/apps/plugins/chip8.c b/apps/plugins/chip8.c
-index bf22fcb..ccc855a 100644
+index bf22fcb0b9..ccc855af5a 100644
 --- a/apps/plugins/chip8.c
 +++ b/apps/plugins/chip8.c
 @@ -1569,7 +1569,7 @@ static bool chip8_run(const char* file)
@@ -13600,7 +13928,7 @@ index bf22fcb..ccc855a 100644
      rb->lcd_puts(0, 5, "---------------");
      ok = chip8_init(file);
 diff --git a/apps/plugins/cue_playlist.c b/apps/plugins/cue_playlist.c
-index 653cbf5..d0d6a0f 100644
+index 653cbf58f5..d0d6a0fd81 100644
 --- a/apps/plugins/cue_playlist.c
 +++ b/apps/plugins/cue_playlist.c
 @@ -251,7 +251,7 @@ static void init_new_cue(const char *playlist_filename)
@@ -13613,7 +13941,7 @@ index 653cbf5..d0d6a0f 100644
  
          rb->fdprintf(cps.cue_fd, "TITLE \"%s\"\n", playlist_filename); /* top level TITLE */
 diff --git a/apps/plugins/iriver_flash.c b/apps/plugins/iriver_flash.c
-index 2b6f70a..ddcfe3c 100644
+index 2b6f70adf9..ddcfe3c562 100644
 --- a/apps/plugins/iriver_flash.c
 +++ b/apps/plugins/iriver_flash.c
 @@ -520,9 +520,9 @@ bail: /* common exit code */
@@ -13638,7 +13966,7 @@ index 2b6f70a..ddcfe3c 100644
      }
      else
 diff --git a/apps/plugins/pdbox/PDa/src/s_stuff.h b/apps/plugins/pdbox/PDa/src/s_stuff.h
-index 566df34..bed8b10 100644
+index 566df34773..bed8b10d47 100644
 --- a/apps/plugins/pdbox/PDa/src/s_stuff.h
 +++ b/apps/plugins/pdbox/PDa/src/s_stuff.h
 @@ -146,7 +146,7 @@ void sys_setvirtualalarm( void);
@@ -13651,7 +13979,7 @@ index 566df34..bed8b10 100644
  #define DEFAULTAUDIODEV 0
  
 diff --git a/apps/plugins/rb_info.c b/apps/plugins/rb_info.c
-index 42b9a92..c92f362 100644
+index 42b9a92052..c92f362017 100644
 --- a/apps/plugins/rb_info.c
 +++ b/apps/plugins/rb_info.c
 @@ -82,7 +82,7 @@ static void synclist_set(char*, int, int, int);
@@ -13673,7 +14001,7 @@ index 42b9a92..c92f362 100644
  MENU_ITEM(M_BUFFERS, ID2P(LANG_BUFFER_STAT), ARRAYLEN(m_buffer)),
  MENU_ITEM(M_BUTTONS, "Buttons", -1), /* Set at runtime in plugin_start: */
 diff --git a/apps/plugins/sdl/src/file/SDL_rwops.c b/apps/plugins/sdl/src/file/SDL_rwops.c
-index 06e3778..d5255fb 100644
+index 06e3778604..d5255fbe64 100644
 --- a/apps/plugins/sdl/src/file/SDL_rwops.c
 +++ b/apps/plugins/sdl/src/file/SDL_rwops.c
 @@ -495,7 +495,7 @@ SDL_RWops *SDL_RWFromFile(const char *file, const char *mode)
@@ -13686,7 +14014,7 @@ index 06e3778..d5255fb 100644
          }
  #endif
 diff --git a/apps/plugins/test_gfx.c b/apps/plugins/test_gfx.c
-index a4a1811..2f656a9 100644
+index a4a1811a18..2f656a991c 100644
 --- a/apps/plugins/test_gfx.c
 +++ b/apps/plugins/test_gfx.c
 @@ -360,7 +360,7 @@ static void time_text(void) /* tests mono_bitmap performance */
@@ -13735,7 +14063,7 @@ index a4a1811..2f656a9 100644
      rb->lcd_setfont(FONT_SYSFIXED);
      count1 = count2 = count3 = count4 = 0;
 diff --git a/apps/root_menu.c b/apps/root_menu.c
-index 918669b..2a828d6 100644
+index 918669b245..2a828d63ec 100644
 --- a/apps/root_menu.c
 +++ b/apps/root_menu.c
 @@ -25,6 +25,11 @@
@@ -13866,7 +14194,7 @@ index 918669b..2a828d6 100644
                  ignore_back_button_stub(false);
  
 diff --git a/apps/tagcache.c b/apps/tagcache.c
-index 4ad0288..2da0324 100644
+index 4ad028869e..f199163090 100644
 --- a/apps/tagcache.c
 +++ b/apps/tagcache.c
 @@ -95,6 +95,18 @@
@@ -13994,7 +14322,23 @@ index 4ad0288..2da0324 100644
      {
          /* Suspend dircache to free its allocation. */
          dircache_free_buffer();
-@@ -3558,6 +3630,8 @@ static bool commit(void)
+@@ -3443,10 +3515,14 @@ static bool commit(void)
+ 
+         allocate_tempbuf();
+     }
++#else
++    /* no directory cache to borrow from: take the memory directly */
++    if (tempbuf_size == 0 && !ASHER_MUSIC_ON())
++        allocate_tempbuf();
+ #endif /* HAVE_DIRCACHE */
+ 
+ #ifdef HAVE_TC_RAMCACHE
+-    if (tempbuf_size == 0 && tc_stat.ramcache_allocated > 0)
++    if (tempbuf_size == 0 && tc_stat.ramcache_allocated > 0 && tcramcache.handle > 0)
+     {
+         tcrc_buffer_lock();
+         tempbuf = (char *)(tcramcache.hdr + 1);
+@@ -3558,6 +3634,8 @@ static bool commit(void)
      } /*!USR_CANCEL*/
  
  commit_error:
@@ -14003,7 +14347,7 @@ index 4ad0288..2da0324 100644
  #ifdef HAVE_TC_RAMCACHE
      if (ramcache_buffer_stolen)
      {
-@@ -5005,6 +5079,43 @@ void tagcache_screensync_enable(bool state)
+@@ -5005,6 +5083,43 @@ void tagcache_screensync_enable(bool state)
      tc_stat.syncscreen = state;
  }
  
@@ -14047,7 +14391,7 @@ index 4ad0288..2da0324 100644
  #ifndef __PCTOOL__
  /* this is called by the database tool to not pull in global_settings */
  static
-@@ -5160,7 +5271,7 @@ commit:
+@@ -5160,7 +5275,7 @@ commit:
  #ifdef __PCTOOL__
      allocate_tempbuf();
  #endif
@@ -14056,7 +14400,7 @@ index 4ad0288..2da0324 100644
      {
          logf("tagcache built!");
      }
-@@ -5250,17 +5361,13 @@ static void tagcache_thread(void)
+@@ -5250,17 +5365,13 @@ static void tagcache_thread(void)
       * the changes first in foreground. */
      if (db_file_exists(TAGCACHE_FILE_TEMP))
      {
@@ -14079,7 +14423,7 @@ index 4ad0288..2da0324 100644
              free_tempbuf();
          }
      }
-@@ -5331,7 +5438,9 @@ static void tagcache_thread(void)
+@@ -5331,7 +5442,9 @@ static void tagcache_thread(void)
                      if (global_settings.tagcache_ram == TAGCACHE_RAM_ON)
                          check_deleted_file_refs(global_settings.tagcache_autoupdate);
                      if (tc_stat.ramcache && global_settings.tagcache_autoupdate)
@@ -14091,7 +14435,7 @@ index 4ad0288..2da0324 100644
                  else
  #endif /* HAVE_RC_RAMCACHE */
 diff --git a/firmware/backlight.c b/firmware/backlight.c
-index 781434e..a6b0206 100644
+index 781434e07b..a6b02061ac 100644
 --- a/firmware/backlight.c
 +++ b/firmware/backlight.c
 @@ -322,11 +322,13 @@ static void backlight_switch(void)
@@ -14384,7 +14728,7 @@ index 781434e..a6b0206 100644
          && remote_button_hold()
  #elif defined(HAS_BUTTON_HOLD)
 diff --git a/firmware/drivers/button_queue.c b/firmware/drivers/button_queue.c
-index 3c6dd9e..8939098 100644
+index 3c6dd9ed74..89390982b4 100644
 --- a/firmware/drivers/button_queue.c
 +++ b/firmware/drivers/button_queue.c
 @@ -126,13 +126,18 @@ static inline void button_queue_wait(struct queue_event *evp, int timeout)
@@ -14415,7 +14759,7 @@ index 3c6dd9e..8939098 100644
  
      /* on touchscreen we posted unconditionally */
 diff --git a/firmware/drivers/ramdisk.c b/firmware/drivers/ramdisk.c
-index 2071529..ccbdf81 100644
+index 2071529e29..ccbdf8113b 100644
 --- a/firmware/drivers/ramdisk.c
 +++ b/firmware/drivers/ramdisk.c
 @@ -115,7 +115,7 @@ void ramdisk_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -14428,7 +14772,7 @@ index 2071529..ccbdf81 100644
      info->product="Ramdisk";
  
 diff --git a/firmware/drivers/sd.c b/firmware/drivers/sd.c
-index 157e22a..84892ae 100644
+index 157e22ae7b..84892ae1f4 100644
 --- a/firmware/drivers/sd.c
 +++ b/firmware/drivers/sd.c
 @@ -42,7 +42,7 @@ void sd_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -14441,7 +14785,7 @@ index 157e22a..84892ae 100644
      info->product = (drive==0) ? "Internal Storage" : "SD Card Slot";
  #else   /* Internal storage is not SD */
 diff --git a/firmware/eeprom_settings.c b/firmware/eeprom_settings.c
-index abd719b..6457293 100644
+index abd719b89a..6457293931 100644
 --- a/firmware/eeprom_settings.c
 +++ b/firmware/eeprom_settings.c
 @@ -57,7 +57,7 @@ bool eeprom_settings_init(void)
@@ -14463,7 +14807,7 @@ index abd719b..6457293 100644
      }
      
 diff --git a/firmware/export/config/android.h b/firmware/export/config/android.h
-index 60f094b..9f583e2 100644
+index 60f094b36d..9f583e26be 100644
 --- a/firmware/export/config/android.h
 +++ b/firmware/export/config/android.h
 @@ -9,7 +9,7 @@
@@ -14476,7 +14820,7 @@ index 60f094b..9f583e2 100644
  #define USB_NONE
  
 diff --git a/firmware/export/config/sdlapp.h b/firmware/export/config/sdlapp.h
-index 5a5ef2c..2ceb3d3 100644
+index 5a5ef2ccae..2ceb3d3b0c 100644
 --- a/firmware/export/config/sdlapp.h
 +++ b/firmware/export/config/sdlapp.h
 @@ -9,7 +9,7 @@
@@ -14489,7 +14833,7 @@ index 5a5ef2c..2ceb3d3 100644
  #define USB_NONE
  
 diff --git a/firmware/export/usb.h b/firmware/export/usb.h
-index de48c89..6448e81 100644
+index de48c890f9..6448e815bd 100644
 --- a/firmware/export/usb.h
 +++ b/firmware/export/usb.h
 @@ -124,6 +124,9 @@ enum
@@ -14519,7 +14863,7 @@ index de48c89..6448e81 100644
  int usb_detect(void);
  #ifdef USB_STATUS_BY_EVENT
 diff --git a/firmware/powermgmt.c b/firmware/powermgmt.c
-index e89c0ce..aacc696 100644
+index e89c0ce034..aacc69659f 100644
 --- a/firmware/powermgmt.c
 +++ b/firmware/powermgmt.c
 @@ -718,6 +718,11 @@ static void collect_power_history(void)
@@ -14573,7 +14917,7 @@ index e89c0ce..aacc696 100644
      }
  
 diff --git a/firmware/target/arm/ata-nand-telechips.c b/firmware/target/arm/ata-nand-telechips.c
-index c7954e3..e59255a 100644
+index c7954e3188..e59255a3b4 100644
 --- a/firmware/target/arm/ata-nand-telechips.c
 +++ b/firmware/target/arm/ata-nand-telechips.c
 @@ -886,7 +886,7 @@ void nand_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -14586,7 +14930,7 @@ index c7954e3..e59255a 100644
  
      /* blocks count */
 diff --git a/firmware/target/arm/imx233/sdmmc-imx233.c b/firmware/target/arm/imx233/sdmmc-imx233.c
-index 6b62f3b..c1e431e 100644
+index 6b62f3bab7..c1e431e1c1 100644
 --- a/firmware/target/arm/imx233/sdmmc-imx233.c
 +++ b/firmware/target/arm/imx233/sdmmc-imx233.c
 @@ -965,7 +965,7 @@ void mmc_get_info(IF_MD(int mmc_drive,) struct storage_info *info)
@@ -14599,7 +14943,7 @@ index 6b62f3b..c1e431e 100644
      info->revision = "0.00";
  }
 diff --git a/firmware/target/arm/ipod/button-clickwheel.c b/firmware/target/arm/ipod/button-clickwheel.c
-index 1f4ca13..b463cfd 100644
+index 1f4ca13dc8..b463cfddbc 100644
 --- a/firmware/target/arm/ipod/button-clickwheel.c
 +++ b/firmware/target/arm/ipod/button-clickwheel.c
 @@ -69,7 +69,24 @@
@@ -14676,7 +15020,7 @@ index 1f4ca13..b463cfd 100644
      if (hold_button != hold_button_old)
      {
 diff --git a/firmware/target/arm/ipod/video/lcd-video.c b/firmware/target/arm/ipod/video/lcd-video.c
-index 5ab9498..fc4f3d3 100644
+index 5ab9498e42..fc4f3d3a1d 100644
 --- a/firmware/target/arm/ipod/video/lcd-video.c
 +++ b/firmware/target/arm/ipod/video/lcd-video.c
 @@ -110,6 +110,10 @@ struct
@@ -14782,7 +15126,7 @@ index 5ab9498..fc4f3d3 100644
  }
  
 diff --git a/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c b/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c
-index 57ee0a9..983a5ce 100644
+index 57ee0a9cd0..983a5ce622 100644
 --- a/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c
 +++ b/firmware/target/arm/s5l8702/ipod6g/piezo-6g.c
 @@ -95,6 +95,14 @@ void piezo_button_beep(bool beep, bool force)
@@ -14801,7 +15145,7 @@ index 57ee0a9..983a5ce 100644
  void piezo_tone(uint32_t period /*uS*/, int32_t duration /*ms*/)
  {
 diff --git a/firmware/target/arm/s5l8702/ipod6g/piezo.h b/firmware/target/arm/s5l8702/ipod6g/piezo.h
-index a4489dd..3f1c7c6 100644
+index a4489dd8ff..3f1c7c60a4 100644
 --- a/firmware/target/arm/s5l8702/ipod6g/piezo.h
 +++ b/firmware/target/arm/s5l8702/ipod6g/piezo.h
 @@ -25,6 +25,7 @@ void piezo_stop(void);
@@ -14813,7 +15157,7 @@ index a4489dd..3f1c7c6 100644
  #ifdef BOOTLOADER
  #include <inttypes.h>
 diff --git a/firmware/target/arm/s5l8702/ipod6g/pmu-6g.c b/firmware/target/arm/s5l8702/ipod6g/pmu-6g.c
-index 91d0da0..8d04ceb 100644
+index 91d0da0c1a..8d04ceb978 100644
 --- a/firmware/target/arm/s5l8702/ipod6g/pmu-6g.c
 +++ b/firmware/target/arm/s5l8702/ipod6g/pmu-6g.c
 @@ -270,7 +270,13 @@ static void NORETURN_ATTR pmu_thread(void)
@@ -14845,7 +15189,7 @@ index 91d0da0..8d04ceb 100644
          }
      }
 diff --git a/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c b/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c
-index 9509e1c..fead002 100644
+index 9509e1c0b8..fead002073 100644
 --- a/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c
 +++ b/firmware/target/arm/s5l8702/ipodnano3g/nand-check-nano3g.c
 @@ -309,7 +309,7 @@ void nand_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -14858,7 +15202,7 @@ index 9509e1c..fead002 100644
      info->revision = "chk1";
  }
 diff --git a/firmware/target/arm/s5l8702/ipodnano3g/piezo-nano3g.c b/firmware/target/arm/s5l8702/ipodnano3g/piezo-nano3g.c
-index 5ff28a8..f088ab9 100644
+index 5ff28a802f..f088ab9a01 100644
 --- a/firmware/target/arm/s5l8702/ipodnano3g/piezo-nano3g.c
 +++ b/firmware/target/arm/s5l8702/ipodnano3g/piezo-nano3g.c
 @@ -85,6 +85,14 @@ void piezo_init(void)
@@ -14889,7 +15233,7 @@ index 5ff28a8..f088ab9 100644
  }
  
 diff --git a/firmware/target/arm/s5l8702/ipodnano3g/piezo.h b/firmware/target/arm/s5l8702/ipodnano3g/piezo.h
-index 87b5517..2e77407 100644
+index 87b5517351..2e77407b4e 100644
 --- a/firmware/target/arm/s5l8702/ipodnano3g/piezo.h
 +++ b/firmware/target/arm/s5l8702/ipodnano3g/piezo.h
 @@ -26,6 +26,7 @@ void piezo_stop(void);
@@ -14901,7 +15245,7 @@ index 87b5517..2e77407 100644
  #ifdef BOOTLOADER
  #include <inttypes.h>
 diff --git a/firmware/target/arm/s5l8702/ipodnano3g/pmu-nano3g.c b/firmware/target/arm/s5l8702/ipodnano3g/pmu-nano3g.c
-index e688e01..86cf923 100644
+index e688e01402..86cf923284 100644
 --- a/firmware/target/arm/s5l8702/ipodnano3g/pmu-nano3g.c
 +++ b/firmware/target/arm/s5l8702/ipodnano3g/pmu-nano3g.c
 @@ -257,7 +257,11 @@ static void pmu_read_inputs(void)
@@ -14944,7 +15288,7 @@ index e688e01..86cf923 100644
          }
      }
 diff --git a/firmware/target/arm/s5l8702/lcd-s5l8702.c b/firmware/target/arm/s5l8702/lcd-s5l8702.c
-index 1c87d37..348413d 100644
+index 1c87d37da0..348413daf0 100644
 --- a/firmware/target/arm/s5l8702/lcd-s5l8702.c
 +++ b/firmware/target/arm/s5l8702/lcd-s5l8702.c
 @@ -406,9 +406,43 @@ static void displaylcd_wait_dma(void)
@@ -15008,7 +15352,7 @@ index 1c87d37..348413d 100644
              /* Write all lines at once */
              memcpy(out, p, pixels * 2);
 diff --git a/firmware/target/arm/tms320dm320/debug-dm320.c b/firmware/target/arm/tms320dm320/debug-dm320.c
-index badf272..4257d15 100644
+index badf272dcf..4257d1508d 100644
 --- a/firmware/target/arm/tms320dm320/debug-dm320.c
 +++ b/firmware/target/arm/tms320dm320/debug-dm320.c
 @@ -370,7 +370,7 @@ bool dbg_hw_info(void)
@@ -15021,7 +15365,7 @@ index badf272..4257d15 100644
              (unsigned int)current_tick, (unsigned int)current_tick/100);
  #if defined(MROBE_500)
 diff --git a/firmware/target/hosted/android/debug-android.c b/firmware/target/hosted/android/debug-android.c
-index 229c836..647f2de 100644
+index 229c836af6..647f2de86c 100644
 --- a/firmware/target/hosted/android/debug-android.c
 +++ b/firmware/target/hosted/android/debug-android.c
 @@ -27,7 +27,7 @@
@@ -15034,7 +15378,7 @@ index 229c836..647f2de 100644
  void debug_init(void) {}
  
 diff --git a/firmware/target/hosted/hiby/usb-hiby-gadget.c b/firmware/target/hosted/hiby/usb-hiby-gadget.c
-index c252f6d..d3549fa 100644
+index c252f6d64e..d3549fa42b 100644
 --- a/firmware/target/hosted/hiby/usb-hiby-gadget.c
 +++ b/firmware/target/hosted/hiby/usb-hiby-gadget.c
 @@ -523,6 +523,6 @@ void usb_init_device(void)
@@ -15046,7 +15390,7 @@ index c252f6d..d3549fa 100644
      sysfs_set_string("/sys/kernel/config/usb_gadget/adb_demo/strings/0x409/serialnumber", "0123456789ABCDEF");
  }
 diff --git a/firmware/target/hosted/ibasso/debug-ibasso.c b/firmware/target/hosted/ibasso/debug-ibasso.c
-index 6295de1..cb24fc3 100644
+index 6295de1f6c..cb24fc3611 100644
 --- a/firmware/target/hosted/ibasso/debug-ibasso.c
 +++ b/firmware/target/hosted/ibasso/debug-ibasso.c
 @@ -33,7 +33,7 @@
@@ -15059,7 +15403,7 @@ index 6295de1..cb24fc3 100644
  
  void debug_init(void)
 diff --git a/firmware/target/hosted/sdl/button-sdl.c b/firmware/target/hosted/sdl/button-sdl.c
-index a329bb6..b2a609c 100644
+index a329bb6fc1..b2a609c2bf 100644
 --- a/firmware/target/hosted/sdl/button-sdl.c
 +++ b/firmware/target/hosted/sdl/button-sdl.c
 @@ -408,7 +408,7 @@ static void show_sim_help(void)
@@ -15072,7 +15416,7 @@ index a329bb6..b2a609c 100644
      #define HELPTXT(SDLK,litdesc)                       \
          keyname = SDL_GetKeyName(SDLK);                 \
 diff --git a/firmware/target/hosted/sdl/sim-ui-defines.h b/firmware/target/hosted/sdl/sim-ui-defines.h
-index f6686ca..427872e 100644
+index f6686ca619..427872eeb3 100644
 --- a/firmware/target/hosted/sdl/sim-ui-defines.h
 +++ b/firmware/target/hosted/sdl/sim-ui-defines.h
 @@ -384,7 +384,7 @@
@@ -15085,7 +15429,7 @@ index f6686ca..427872e 100644
  #define UI_LCD_POSY                 0
  #define UI_WIDTH                    LCD_WIDTH
 diff --git a/firmware/target/hosted/usb-hiby.c b/firmware/target/hosted/usb-hiby.c
-index 050c86e..74a5e0d 100644
+index 050c86e446..74a5e0d95f 100644
 --- a/firmware/target/hosted/usb-hiby.c
 +++ b/firmware/target/hosted/usb-hiby.c
 @@ -137,7 +137,7 @@ void usb_init_device(void)
@@ -15099,7 +15443,7 @@ index 050c86e..74a5e0d 100644
 +    sysfs_set_string("/sys/class/android_usb/android0/f_mass_storage/inquiry_string", "Asher OS 0100");
  }
 diff --git a/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4740.c b/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4740.c
-index 368d7c0..17c71ee 100644
+index 368d7c062d..17c71ee4ae 100644
 --- a/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4740.c
 +++ b/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4740.c
 @@ -730,7 +730,7 @@ void nand_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -15112,7 +15456,7 @@ index 368d7c0..17c71ee 100644
  
      /* blocks count */
 diff --git a/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4760.c b/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4760.c
-index 2aebcad..b505784 100644
+index 2aebcad327..b505784b45 100644
 --- a/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4760.c
 +++ b/firmware/target/mips/ingenic_jz47xx/ata-nand-jz4760.c
 @@ -665,7 +665,7 @@ void nand_get_info(IF_MD(int drive,) struct storage_info *info)
@@ -15125,7 +15469,7 @@ index 2aebcad..b505784 100644
  
      /* blocks count */
 diff --git a/firmware/usb.c b/firmware/usb.c
-index b5b5565..2838668 100644
+index b5b556516c..2838668365 100644
 --- a/firmware/usb.c
 +++ b/firmware/usb.c
 @@ -35,12 +35,14 @@
@@ -15395,7 +15739,7 @@ index b5b5565..2838668 100644
  {
  }
 diff --git a/firmware/usbstack/iap/libiap/iap.c b/firmware/usbstack/iap/libiap/iap.c
-index af1fe25..3234da1 100644
+index af1fe2545c..3234da10e7 100644
 --- a/firmware/usbstack/iap/libiap/iap.c
 +++ b/firmware/usbstack/iap/libiap/iap.c
 @@ -205,7 +205,7 @@ static int32_t handle_command(struct IAPContext* ctx, uint8_t lingo, uint16_t co
@@ -15408,7 +15752,7 @@ index af1fe25..3234da1 100644
              if (fd >= 0) {
                  read_line(fd, ipod_name, sizeof(ipod_name));
 diff --git a/firmware/usbstack/usb_core.c b/firmware/usbstack/usb_core.c
-index f1b7359..b76874c 100644
+index f1b7359973..b76874c384 100644
 --- a/firmware/usbstack/usb_core.c
 +++ b/firmware/usbstack/usb_core.c
 @@ -53,6 +53,9 @@
@@ -15470,7 +15814,7 @@ index f1b7359..b76874c 100644
            *p-- = hex[x & 0xf];
            x >>= 4;
 diff --git a/firmware/usbstack/usb_storage.c b/firmware/usbstack/usb_storage.c
-index a262770..5469217 100644
+index a262770e4a..546921789a 100644
 --- a/firmware/usbstack/usb_storage.c
 +++ b/firmware/usbstack/usb_storage.c
 @@ -315,6 +315,8 @@ static struct {
@@ -15711,7 +16055,7 @@ index a262770..5469217 100644
      cur_sense_data.sense_key = SENSE_ILLEGAL_REQUEST;
 diff --git a/tools/asher/make_assets.py b/tools/asher/make_assets.py
 new file mode 100644
-index 0000000..7942994
+index 0000000000..7942994676
 --- /dev/null
 +++ b/tools/asher/make_assets.py
 @@ -0,0 +1,10 @@
@@ -15727,7 +16071,7 @@ index 0000000..7942994
 +print("ok")
 diff --git a/tools/asher/video_to_awp.py b/tools/asher/video_to_awp.py
 new file mode 100644
-index 0000000..2269448
+index 0000000000..226944833a
 --- /dev/null
 +++ b/tools/asher/video_to_awp.py
 @@ -0,0 +1,23 @@
