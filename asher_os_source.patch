@@ -1,8 +1,8 @@
 diff --git a/apps/SOURCES b/apps/SOURCES
-index bb612b38fb..42addc73b9 100644
+index bb612b38fb..4846eeed0e 100644
 --- a/apps/SOURCES
 +++ b/apps/SOURCES
-@@ -20,6 +20,24 @@ menu.c
+@@ -20,6 +20,25 @@ menu.c
  menus/menu_common.c
  menus/display_menu.c
  menus/theme_menu.c
@@ -13,6 +13,7 @@ index bb612b38fb..42addc73b9 100644
 +asher/asher_stats.c
 +asher/asher_home.c
 +asher/asher_ui.c
++asher/asher_usb.c
 +asher/asher_font3d.c
 +asher/asher_model.c
 +asher/asher_list.c
@@ -619,10 +620,10 @@ index 0000000000..541fe549c4
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
 new file mode 100644
-index 0000000000..8753170d40
+index 0000000000..55029a66c5
 --- /dev/null
 +++ b/apps/asher/asher_home.c
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,438 @@
 +/* Asher OS home screen.
 + *  Bubbles / Dark: four glossy bubbles in an even 2x2 grid over the live
 + *  wallpaper. Turning right moves right, then wraps down to the first box
@@ -649,6 +650,8 @@ index 0000000000..8753170d40
 +#include "asher_media.h"
 +#include "asher_quick.h"
 +#include "button.h"
++#include "powermgmt.h"
++#include "metadata.h"
 +
 +/* home screen buttons: the wheel and centre pick an item, Menu opens Now
 + * Playing, and << >> play/pause control the music like on Now Playing */
@@ -722,44 +725,105 @@ index 0000000000..8753170d40
 +    aui_update();
 +}
 +
++/* Original / Dark: the iPod's split screen. The list on the left, and on
++ * the right a picture for the chosen item (the song's cover for Music and
++ * Now Playing) */
++static void pane_gear(int cx, int cy, unsigned c, unsigned hole)
++{
++    for (int a = 0; a < 8; a++)
++    {
++        static const signed char d[8][2] = { {0,-26},{18,-18},{26,0},{18,18},
++                                             {0,26},{-18,18},{-26,0},{-18,-18} };
++        aui_aa_line16((cx + d[a][0] * 3 / 4) * 16, (cy + d[a][1] * 3 / 4) * 16,
++                      (cx + d[a][0]) * 16, (cy + d[a][1]) * 16, 190, c);
++    }
++    aui_aa_arc(cx, cy, 24, 0, 3600, c);
++    aui_aa_arc(cx, cy, 9, 0, 3600, hole);
++}
 +static void draw_list(int sel)
 +{
-+    const struct aui_theme *t = aui_theme();
-+    int rh = 40, y0 = AUI_BAR + 4, pane = 190;
++    bool dk = asher_layout == 2;
++    const int rh = 30, y0 = AUI_BAR, pane = 160;
++    unsigned bg = dk ? 0x000000 : 0xffffff;
 +
-+    aui_background(true);
-+    if (t->light)
++    aui_fill(0, 0, pane, AUI_H, bg);
++    /* the picture pane */
++    int px = pane, pw = AUI_W - pane, ph = AUI_H - AUI_BAR;
++    aui_vgrad(px, AUI_BAR, pw, ph, dk ? 0x2a2c31 : 0xf3f4f7, dk ? 0x0b0b0d : 0xc9cdd5);
++    int cx = px + pw / 2, cy = AUI_BAR + ph / 2;
++    if (sel == 0 || sel == 3)
 +    {
-+        aui_vgrad(pane, AUI_BAR, AUI_W - pane, AUI_H - AUI_BAR, 0xf4f5f8, 0xdfe2e8);
-+        aui_fill(pane, AUI_BAR, 1, AUI_H - AUI_BAR, 0xc5c9d2);
++        if (aui_albumart_scaled(px, AUI_BAR + (ph - pw) / 2 - 12, pw))
++            aui_reflect(px, AUI_BAR + (ph - pw) / 2 - 12, pw, pw, 40, dk ? 70 : 100);
++        else
++            aui_sprite_c(SPR_NOTE, cx, cy);
 +    }
++    else if (sel == 1)
++        pane_gear(cx, cy - 6, dk ? 0xb8bcc4 : 0x7d838d, dk ? 0x1b1c20 : 0xe1e4e9);
 +    else
 +    {
-+        aui_shade(0, AUI_BAR, pane, AUI_H - AUI_BAR, 0, 70, t->bg_bot);
-+        aui_fill(pane, AUI_BAR, 1, AUI_H - AUI_BAR, 0x3a3c46);
++        /* a big iPod battery with the number under it */
++        int bat = battery_level();
++        int bx = cx - 40, by = cy - 30;
++        aui_round(bx, by, 72, 36, 6, dk ? 0xc9ccd3 : 0x50555e, dk ? 0xc9ccd3 : 0x50555e);
++        aui_round(bx + 3, by + 3, 66, 30, 4, dk ? 0x1b1c20 : 0xfdfdfe, dk ? 0x101113 : 0xdfe2e7);
++        aui_round(bx + 72, by + 10, 6, 16, 2, dk ? 0xc9ccd3 : 0x50555e, dk ? 0xc9ccd3 : 0x50555e);
++        if (bat > 0)
++        {
++            int f = (bat * 62 + 50) / 100;
++            aui_round(bx + 5, by + 5, MAX(f, 6), 26, 3, aui_batt_rgb(bat), aui_batt_rgb(bat));
++            aui_shade(bx + 5, by + 5, MAX(f, 6), 10, 0, 150, 0xffffff);
++        }
 +    }
++    /* a soft shadow where the pane meets the list */
++    for (int k = 0; k < 6; k++)
++        aui_shade(px + k, AUI_BAR, 1, ph, 0, 140 + k * 20, 0x000000);
 +    aui_topbar();
 +    for (int i = 0; i < NITEMS; i++)
 +    {
 +        int y = y0 + i * rh;
-+        if (i == sel) aui_vgrad(0, y, pane, rh, t->sel1, t->sel2);
-+        unsigned c = i == sel ? 0xffffff : (t->light ? 0x9aa0ab : 0x80869c);
++        bool s = i == sel;
++        if (s)
++        {
++            aui_vgrad(0, y, pane, rh, dk ? 0x4f9cf0 : 0x6fb3f7, dk ? 0x1450b4 : 0x1b67d4);
++            aui_fill(0, y, pane, 1, dk ? 0x7ab8f7 : 0xa8d2fb);
++            aui_fill(0, y + rh - 1, pane, 1, dk ? 0x0d3d8c : 0x134fae);
++        }
++        unsigned c = s ? 0xffffff : (dk ? 0x8a8d94 : 0x6f737b);
 +        for (int k = 0; k < 5; k++)
 +        {
-+            aui_fill(pane - 22 + k, y + rh / 2 - 5 + k, 2, 1, c);
-+            aui_fill(pane - 22 + k, y + rh / 2 + 5 - k, 2, 1, c);
++            aui_fill(pane - 16 + k, y + rh / 2 - 5 + k, 2, 1, c);
++            aui_fill(pane - 16 + k, y + rh / 2 + 5 - k, 2, 1, c);
 +        }
 +    }
-+    int cx = pane + (AUI_W - pane) / 2;
-+    aui_sprite_c(SPR_MUSIC_S + sel, cx, 112);
-+    aui_sprite_c(SPR_LBL_MUSIC + sel, cx, 168);
 +    aui_present();
 +    for (int i = 0; i < NITEMS; i++)
 +    {
 +        int y = y0 + i * rh, fh = aui_font_h(AF_BIG);
-+        aui_text(AF_BIG, 12, y + (rh - fh) / 2,
-+                 i == sel ? 0xffffff : t->text, names[i], pane - 40, 0);
++        aui_text(AF_BIG, 10, y + (rh - fh) / 2,
++                 i == sel ? 0xffffff : (dk ? 0xf2f2f2 : 0x000000), names[i], pane - 30, 0);
 +    }
++    /* under the list: what's playing, small, like the iPod's own */
++    {
++        struct mp3entry *id3 = audio_current_track();
++        if ((audio_status() & AUDIO_STATUS_PLAY) && id3)
++        {
++            const char *tt = (id3->title && id3->title[0]) ? id3->title : "";
++            const char *ar = (id3->artist && id3->artist[0]) ? id3->artist : "";
++            int yy = AUI_H - 40;
++            aui_text(AF_SMALL, 10, yy, dk ? 0xffffff : 0x000000, tt, pane - 16, 0);
++            aui_text(AF_SMALLR, 10, yy + 17, dk ? 0x9a9ca3 : 0x6b6f78, ar, pane - 16, 0);
++        }
++    }
++    if (sel == 2)
++    {
++        int bat = battery_level();
++        char b[16];
++        snprintf(b, sizeof(b), bat >= 0 ? "%d%%" : "--", bat);
++        aui_text(AF_TITLE, cx, cy + 14, dk ? 0xffffff : 0x1d1f24, b, pw - 10, 1);
++    }
++    else if (sel == 1)
++        aui_text(AF_MED, cx, cy + 34, dk ? 0xd8dbe2 : 0x3a3d44, "Settings", pw - 10, 1);
 +    aui_topbar_text("Asher OS");
 +    aui_update();
 +}
@@ -806,8 +870,8 @@ index 0000000000..8753170d40
 +    }
 +}
 +
-+/* Modern: the same 2 x 2 layout as Bubbles, with app icons on the chosen
-+ * wallpaper (or a soft colour blend when there's none) */
++/* Modern 2026: a big widget (what's playing, or the clock) over a dock
++ * of four apps */
 +static void draw_modern(int sel)
 +{
 +    asher_wp_prepare();
@@ -819,36 +883,83 @@ index 0000000000..8753170d40
 +        if (bg) memcpy(aui_fb, bg, sizeof(fb_data) * AUI_W * AUI_H);
 +        else aui_vgrad(0, 0, AUI_W, AUI_H, 0x7aa8ff, 0xc89cff);
 +    }
++    aui_shade(0, 0, AUI_W, AUI_BAR + 8, 0, 190, 0x000000);   /* lets the white bar text read */
++    aui_bar_dark = true;
 +    aui_topbar();
++    struct mp3entry *id3 = audio_current_track();
++    bool playing = (audio_status() & AUDIO_STATUS_PLAY) && id3;
++    bool paused = audio_status() & AUDIO_STATUS_PAUSE;
++
++    /* the widget */
++    const int WX = 12, WY = AUI_BAR + 6, WW = AUI_W - 24, WH = 92;
++    aui_shade(WX, WY, WW, WH, 20, 40, 0xffffff);
++    int ax = WX + 11, ay = WY + 11, as = WH - 22;
++    if (playing)
++    {
++        if (!aui_albumart_scaled(ax, ay, as))
++            aui_round(ax, ay, as, as, 12, 0xff5e6c, 0xfa2346);
++        else
++            aui_corners(ax, ay, as, as, 10, NULL, 0xf4f4f6);
++        long len = id3->length ? (long)id3->length : 1;
++        int px0 = ax + as + 12, pw = WX + WW - 14 - px0, py = WY + WH - 18;
++        aui_round(px0, py, pw, 4, 2, 0xd1d1d6, 0xd1d1d6);
++        int fl = (int)((long long)pw * MIN((long)id3->elapsed, len) / len);
++        if (fl > 0) aui_round(px0, py, MAX(4, fl), 4, 2, 0xfa2346, 0xfa2346);
++    }
++    /* the dock */
++    const int DX = 12, DY = WY + WH + 10, DW = AUI_W - 24, DH = AUI_H - DY - 8;
++    aui_shade(DX, DY, DW, DH, 24, 120, 0xffffff);
 +    static const unsigned fallback[NITEMS] = { 0xfa2346, 0x8e8e93, 0x0a84ff, 0xe5e5ea };
++    int cxs[NITEMS];
 +    for (int i = 0; i < NITEMS; i++)
 +    {
-+        int cx = (i % 2) ? 234 : 86;
-+        int top = AUI_BAR + (i / 2) * ((AUI_H - AUI_BAR) / 2);
-+        int cy = top + 46;
++        cxs[i] = DX + DW * (2 * i + 1) / (2 * NITEMS);
 +        bool s = i == sel;
-+        if (s)          /* a soft frosted tile behind the chosen app */
-+            aui_shade(cx - 50, top + 4, 100, 102, 22, 160, 0xffffff);
-+        if (!aui_sprite_c((s ? SPR_M_MUSIC_S : SPR_M_MUSIC) + i, cx, cy)
-+            && !aui_sprite_c(SPR_M_MUSIC + i, cx, cy))
-+            modern_icon(i, cx, cy, fallback[i]);
++        int cy = DY + 34;
++        if (s) aui_shade(cxs[i] - 36, DY + 4, 72, DH - 8, 18, 150, 0xffffff);
++        if (!aui_sprite_c((s ? SPR_MD_MUSIC_S : SPR_MD_MUSIC) + i, cxs[i], cy)
++            && !aui_sprite_c((s ? SPR_M_MUSIC_S : SPR_M_MUSIC) + i, cxs[i], cy))
++            modern_icon(i, cxs[i], cy, fallback[i]);
 +    }
 +    aui_present();
++
++    /* widget text */
++    if (playing)
++    {
++        int tx = ax + as + 12, tw = WX + WW - 14 - tx;
++        aui_text(AF_SMALL, tx, ay, paused ? 0xff9500 : 0xfa2346, paused ? "PAUSED" : "NOW PLAYING", tw, 0);
++        aui_text(AF_MED, tx, ay + 17, 0x1c1c1e, (id3->title && id3->title[0]) ? id3->title : "Unknown", tw, 0);
++        aui_text(AF_SMALLR, tx, ay + 36, 0x6e6e73, (id3->artist && id3->artist[0]) ? id3->artist : "", tw, 0);
++    }
++    else
++    {
++        char buf[32];
++        struct tm *tm = get_time();
++        static const char *dn[7] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
++        static const char *mn[12] = { "January", "February", "March", "April", "May", "June", "July",
++                                      "August", "September", "October", "November", "December" };
++        aui_time_str(buf, sizeof(buf));
++        char *sp = strchr(buf, ' ');
++        if (sp) *sp = 0;
++        aui_text(AF_TITLE, WX + 16, WY + 14, 0x1c1c1e, buf, 140, 0);
++        snprintf(buf, sizeof(buf), "%s, %s %d", dn[tm->tm_wday % 7], mn[tm->tm_mon % 12], tm->tm_mday);
++        aui_text(AF_SMALL, WX + 16, WY + 52, 0x3a3a3c, buf, WW - 32, 0);
++        int bat = battery_level();
++        if (bat >= 0)
++        {
++            snprintf(buf, sizeof(buf), "%d%%", bat);
++            aui_text(AF_SMALLR, WX + 16, WY + 70, 0x6e6e73, buf, 60, 0);
++        }
++    }
 +    for (int i = 0; i < NITEMS; i++)
 +    {
-+        int cx = (i % 2) ? 234 : 86;
-+        int top = AUI_BAR + (i / 2) * ((AUI_H - AUI_BAR) / 2);
-+        bool s = i == sel;
-+        const char *nm = i == 2 ? "Info" : names[i];       /* Modern calls Stats "Info" */
-+        aui_text(AF_SMALL, cx + 1, top + 87, 0x202028, nm, 110, 1);   /* shadow */
-+        aui_text(AF_SMALL, cx, top + 86, s ? 0xffffff : 0xeeeef4, nm, 110, 1);
++        const char *nm = i == 2 ? "Info" : i == 3 ? "Playing" : names[i];
++        aui_text(AF_SMALLR, cxs[i], DY + DH - 20, i == sel ? 0x000000 : 0x3a3a3c, nm, 76, 1);
 +    }
 +    if (aui_assets_old)
-+    {
-+        aui_text(AF_SMALL, AUI_W / 2, AUI_H - 30, 0xff3b30, "Picture files are out of date", AUI_W - 10, 1);
-+        aui_text(AF_SMALLR, AUI_W / 2, AUI_H - 15, 0xffffff, "Copy the whole .rockbox folder from the zip", AUI_W - 10, 1);
-+    }
++        aui_text(AF_SMALLR, AUI_W / 2, DY - 16, 0xffffff, "Picture files are out of date", AUI_W - 10, 1);
 +    aui_topbar_text("");
++    aui_bar_dark = false;
 +    aui_update();
 +}
 +
@@ -965,10 +1076,10 @@ index 0000000000..0f36b5cbaa
 +#endif
 diff --git a/apps/asher/asher_list.c b/apps/asher/asher_list.c
 new file mode 100644
-index 0000000000..d396c34886
+index 0000000000..c0756b8a7d
 --- /dev/null
 +++ b/apps/asher/asher_list.c
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,503 @@
 +/* Asher OS list screen: thick rounded selection bar, top bar with the
 + * clock, and accelerated scrolling with a first-letter bubble. */
 +#include <stdio.h>
@@ -1022,11 +1133,42 @@ index 0000000000..d396c34886
 +static int list_action(bool music, int tmo) { (void)music; return get_action(CONTEXT_STD, tmo); }
 +#endif
 +
-+static int row_h(const struct aui_list *l) { return l->two_line ? 42 : 35; }
-+static int visible(const struct aui_list *l) { return (AUI_H - AUI_BAR) / row_h(l); }
++/* ---- per-look geometry (2.7: every theme lays its lists out its own way) */
++static bool big_title;     /* Modern: the large title is showing (list at the top) */
++#define MOD_TITLE_H 34
++
++static int row_h(const struct aui_list *l)
++{
++    switch (aui_style())
++    {
++        case STY_ORIG: case STY_DARK: return l->two_line ? 40 : 30;
++        case STY_MODERN:              return l->two_line ? 42 : 35;
++        case STY_MOON:                return l->two_line ? 42 : 32;
++        default:                      return l->two_line ? 42 : 35;
++    }
++}
++static int list_y0(void)
++{
++    int sty = aui_style();
++    if (sty == STY_MODERN) return AUI_BAR + 4 + (big_title ? MOD_TITLE_H : 0);
++    if (sty == STY_ORIG || sty == STY_DARK) return AUI_BAR;
++    return AUI_BAR + 2;
++}
++static int visible_at(const struct aui_list *l, int y0) { return (AUI_H - y0) / row_h(l); }
++static int visible(const struct aui_list *l) { return visible_at(l, list_y0()); }
 +
 +static void clamp_top(struct aui_list *l)
 +{
++    if (aui_style() == STY_MODERN)
++    {
++        /* like a phone: the big title shows while you're at the top, and
++         * folds away once you scroll past the rows under it */
++        big_title = true;
++        int vt = visible(l);
++        if (l->sel < vt && l->top == 0) return;
++        big_title = false;
++    }
++    else big_title = false;
 +    int vis = visible(l);
 +    if (l->sel < l->top) l->top = l->sel;
 +    if (l->sel >= l->top + vis) l->top = l->sel - vis + 1;
@@ -1042,72 +1184,228 @@ index 0000000000..d396c34886
 +        aui_fill(x + i, cy + 5 - i, 2, 1, c);
 +    }
 +}
++/* MoonPod's chunky pixel arrow */
++static void chevron_px(int x, int cy, unsigned c)
++{
++    for (int i = 0; i < 4; i++)
++    {
++        aui_fill(x + i * 2, cy - 7 + i * 2, 2, 2, c);
++        aui_fill(x + i * 2, cy + 5 - i * 2, 2, 2, c);
++    }
++    aui_fill(x + 8, cy - 1, 2, 2, c);
++}
++
++/* a quiet night sky: the same stars every time (no flicker) */
++void aui_night_sky(int y0, int y1)
++{
++    aui_vgrad(0, y0, AUI_W, y1 - y0, 0x110d1e, 0x050408);
++    unsigned seed = 0x2545f491;
++    for (int i = 0; i < 46; i++)
++    {
++        seed = seed * 1103515245u + 12345u;
++        int x = (seed >> 8) % AUI_W;
++        seed = seed * 1103515245u + 12345u;
++        int y = y0 + (int)((seed >> 8) % (unsigned)(y1 - y0));
++        unsigned c = (i % 7 == 0) ? 0xcfc6ee : (i % 3 == 0 ? 0x5a4f80 : 0x372f52);
++        aui_fill(x, y, 1, 1, c);
++        if (i % 11 == 0) { aui_fill(x - 1, y, 3, 1, 0x4a4070); aui_fill(x, y - 1, 1, 3, 0x4a4070); aui_fill(x, y, 1, 1, 0xe9e3d3); }
++    }
++}
++
++/* a pixel frame: square corners with the corner pixel cut, like a game menu */
++void aui_px_box(int x, int y, int w, int h, unsigned fill, unsigned edge)
++{
++    aui_fill(x + 2, y + 2, w - 4, h - 4, fill);
++    aui_fill(x + 2, y, w - 4, 2, edge);
++    aui_fill(x + 2, y + h - 2, w - 4, 2, edge);
++    aui_fill(x, y + 2, 2, h - 4, edge);
++    aui_fill(x + w - 2, y + 2, 2, h - 4, edge);
++}
 +
 +void aui_list_draw(struct aui_list *l, int letter)
 +{
 +    const struct aui_theme *t = aui_theme();
++    int sty = aui_style();
++    bool ipod = sty == STY_ORIG || sty == STY_DARK;
++    bool dk = sty == STY_DARK;
 +    char buf[128], sub[128];
-+    int rh = row_h(l), vis = visible(l), y0 = AUI_BAR + 2;
-+    bool sb = l->count > vis;
-+    int right = AUI_W - (sb ? 12 : 6);
 +
 +    clamp_top(l);
-+    aui_vgrad(0, 0, AUI_W, AUI_H, t->bg_top, t->bg_bot);
++    int rh = row_h(l), y0 = list_y0(), vis = visible(l);
++    bool sb = l->count > vis;
++    int right = AUI_W - (sb ? 12 : 6);
++    int tx = 18;                       /* where row text starts */
++    unsigned c_txt = t->text, c_sel = t->seltext, c_sub = t->sub, c_ssub = 0xe6ecff;
++    unsigned c_chev = t->light ? 0x9aa0ab : 0x6c7290;
++
++    /* ---- background ---- */
++    if (ipod)
++    {
++        aui_fill(0, 0, AUI_W, AUI_H, dk ? 0x000000 : 0xffffff);
++        right = AUI_W - (sb ? 10 : 0);
++        tx = 10;
++        c_txt = dk ? 0xf2f2f2 : 0x000000; c_sel = 0xffffff;
++        c_sub = dk ? 0x9a9ca3 : 0x6b6f78; c_ssub = 0xdfeaff;
++        c_chev = dk ? 0x8a8d94 : 0x6f737b;
++    }
++    else if (sty == STY_MODERN)
++    {
++        aui_fill(0, 0, AUI_W, AUI_H, 0xf2f2f7);
++        right = AUI_W - 12;
++        tx = 26;
++        c_txt = 0x000000; c_sel = 0x0060df; c_sub = 0x8a8a8e; c_ssub = 0x3a7fe0;
++        c_chev = 0xc4c4c9;
++    }
++    else if (sty == STY_MOON)
++    {
++        aui_night_sky(0, AUI_H);
++        tx = 26;
++        c_txt = 0xe9e3d3; c_sel = 0xffffff; c_sub = 0x8d84a8; c_ssub = 0xd8ccff;
++        c_chev = 0x5f5388;
++    }
++    else
++        aui_vgrad(0, 0, AUI_W, AUI_H, t->bg_top, t->bg_bot);
 +    aui_topbar();
 +
-+    /* Modern: the rows sit on one white rounded card */
-+    if (t->modern)
++    /* Modern: grouped rows on one white card */
++    if (sty == STY_MODERN)
 +    {
 +        int rows = MIN(vis, l->count - l->top);
-+        aui_round(6, y0 + 2, right - 6, rows * rh, 12, 0xffffff, 0xffffff);
++        aui_round(10, y0, right - 10, rows * rh, 14, 0xffffff, 0xffffff);
 +    }
-+    /* rows: compose bars first */
++
++    /* ---- rows ---- */
 +    for (int r = 0; r < vis; r++)
 +    {
 +        int i = l->top + r;
 +        if (i >= l->count) break;
 +        int y = y0 + r * rh;
-+        if (i == l->sel)
-+            aui_round(6, y + 2, right - 6, rh - 4, t->modern ? 11 : 9, t->sel1, t->sel2);
-+        else if (t->modern)
++        bool s = i == l->sel;
++        bool last = r == vis - 1 || i == l->count - 1;
++        if (ipod)
 +        {
-+            if (r < vis - 1 && i < l->count - 1 && i + 1 != l->sel)
-+                aui_fill(18, y + rh + 1, right - 24, 1, 0xe2e2e7);
++            if (s)
++            {
++                aui_vgrad(0, y, right, rh, dk ? 0x4f9cf0 : 0x6fb3f7, dk ? 0x1450b4 : 0x1b67d4);
++                aui_fill(0, y, right, 1, dk ? 0x7ab8f7 : 0xa8d2fb);
++                aui_fill(0, y + rh - 1, right, 1, dk ? 0x0d3d8c : 0x134fae);
++            }
 +        }
-+        else if (t->light)
-+            aui_fill(12, y + rh - 1, right - 18, 1, 0xe3e5ea);
++        else if (sty == STY_MODERN)
++        {
++            if (s)
++            {
++                int top_r = (r == 0) ? 14 : 8, h = rh;
++                (void)top_r;
++                aui_round(10, y, right - 10, h, (r == 0 || last) ? 14 : 0, 0xdcebff, 0xdcebff);
++                /* keep the square corners on the inside edge of the card */
++                if (r == 0 && !last) aui_fill(10, y + h - 14, right - 10, 14, 0xdcebff);
++                if (last && r != 0) aui_fill(10, y, right - 10, 14, 0xdcebff);
++            }
++            else if (!last && i + 1 != l->sel)
++                aui_fill(tx, y + rh - 1, right - tx, 1, 0xe5e5ea);
++        }
++        else if (sty == STY_MOON)
++        {
++            if (s)
++            {
++                aui_px_box(6, y + 1, right - 6, rh - 2, 0x2a1a4a, 0xb9a7ff);
++                aui_fill(8, y + 3, right - 10, 1, 0x4a3478);
++                /* a crescent moon marks the row */
++                static const char *const cres[] = {
++                    "..###....", ".###.....", "####.....", "###......", "###......",
++                    "####.....", "####.....", ".####....", "..#####.." };
++                aui_pix(cres, 9, 11, y + rh / 2 - 4, 0xffe9a8);
++            }
++            else if (!last)
++                for (int x = tx; x < right - 8; x += 6) aui_fill(x, y + rh - 1, 2, 1, 0x241c38);
++        }
++        else
++        {
++            if (s)
++                aui_round(6, y + 2, right - 6, rh - 4, 9, t->sel1, t->sel2);
++            else if (t->light)
++                aui_fill(12, y + rh - 1, right - 18, 1, 0xe3e5ea);
++        }
 +        if (l->style && (l->style(l, i) & AUI_ROW_DOT))
 +        {
 +            int dx = right - (l->chevrons ? 34 : 18);
-+            unsigned dc = i == l->sel ? 0xffffff : 0xff3b30;
-+            aui_round(dx, y + rh / 2 - 4, 9, 9, 4, dc, dc);
++            unsigned dc = (s && sty != STY_MODERN) ? 0xffffff : (sty == STY_MOON ? 0xffe9a8 : 0xff3b30);
++            if (sty == STY_MOON) aui_fill(dx + 1, y + rh / 2 - 3, 6, 6, dc);
++            else if (ipod)
++            {
++                /* the iPod's little speaker for "now playing" */
++                aui_fill(dx, y + rh / 2 - 2, 3, 5, s ? 0xffffff : 0x2f6fd8);
++                for (int k = 0; k < 4; k++)
++                    aui_fill(dx + 3 + k, y + rh / 2 - 2 - k, 1, 5 + 2 * k, s ? 0xffffff : 0x2f6fd8);
++            }
++            else aui_round(dx, y + rh / 2 - 4, 9, 9, 4, dc, dc);
 +        }
 +        if (l->chevrons)
-+            chevron(right - 16, y + rh / 2,
-+                    i == l->sel ? 0xffffff : (t->modern ? 0xc4c4ca : t->light ? 0x9aa0ab : 0x6c7290));
++        {
++            unsigned cc = s ? (sty == STY_MODERN ? 0x0060df : 0xffffff) : c_chev;
++            if (sty == STY_MOON) chevron_px(right - 18, y + rh / 2, cc);
++            else chevron(right - 16, y + rh / 2, cc);
++        }
 +    }
++
++    /* ---- scroll position ---- */
 +    if (sb)
 +    {
-+        int th = AUI_H - AUI_BAR - 8, x = AUI_W - 7;
++        int ty = y0 + 2, th = AUI_H - ty - 4;
 +        int kh = MAX(16, th * vis / l->count);
-+        int ky = AUI_BAR + 4 + (th - kh) * l->top / MAX(1, l->count - vis);
-+        aui_round(x, AUI_BAR + 4, 4, th, 2, t->track, t->track);
-+        aui_round(x, ky, 4, kh, 2, t->sel1, t->sel2);
++        int ky = ty + (th - kh) * l->top / MAX(1, l->count - vis);
++        if (ipod)
++        {
++            /* the iPod's: a framed track with a glossy blue thumb */
++            int x = AUI_W - 9;
++            aui_fill(x, y0, 9, AUI_H - y0, dk ? 0x3a3c42 : 0x9aa0aa);
++            aui_vgrad(x + 1, y0, 8, AUI_H - y0, dk ? 0x16171a : 0xffffff, dk ? 0x0c0c0e : 0xe9ebef);
++            ty = y0; th = AUI_H - y0;
++            kh = MAX(14, th * vis / l->count);
++            ky = ty + (th - kh) * l->top / MAX(1, l->count - vis);
++            aui_fill(x + 1, ky, 8, kh, dk ? 0x0d3d8c : 0x134fae);
++            aui_vgrad(x + 2, ky + 1, 6, kh - 2, dk ? 0x5aa2f2 : 0x7dbaf8, dk ? 0x1a5bc4 : 0x2470da);
++        }
++        else if (sty == STY_MODERN)
++            aui_round(AUI_W - 7, ky, 3, kh, 1, 0xb4b4ba, 0xb4b4ba);
++        else if (sty == STY_MOON)
++        {
++            int x = AUI_W - 7;
++            for (int y = ty; y < ty + th; y += 4) aui_fill(x + 1, y, 2, 2, 0x2c2440);
++            for (int y = ky; y < ky + kh - 1; y += 3) aui_fill(x, y, 4, 2, 0xb9a7ff);
++        }
++        else
++        {
++            int x = AUI_W - 7;
++            ty = AUI_BAR + 4; th = AUI_H - AUI_BAR - 8;
++            kh = MAX(16, th * vis / l->count);
++            ky = ty + (th - kh) * l->top / MAX(1, l->count - vis);
++            aui_round(x, ty, 4, th, 2, t->track, t->track);
++            aui_round(x, ky, 4, kh, 2, t->sel1, t->sel2);
++        }
 +    }
 +    if (letter)
 +    {
-+        aui_shade(AUI_W / 2 - 34, 30 + (AUI_H - 30) / 2 - 34, 68, 68, 16, 70, 0x000000);
++        int cx = AUI_W / 2, cy = 30 + (AUI_H - 30) / 2;
++        if (sty == STY_MOON) aui_px_box(cx - 32, cy - 32, 64, 64, 0x1a1230, 0xb9a7ff);
++        else if (sty == STY_MODERN) aui_shade(cx - 34, cy - 34, 68, 68, 18, 90, 0x3a3a3c);
++        else if (ipod) aui_shade(cx - 34, cy - 34, 68, 68, 10, 60, 0x000000);
++        else aui_shade(cx - 34, cy - 34, 68, 68, 16, 70, 0x000000);
 +    }
 +    aui_present();
 +
-+    /* text */
++    /* ---- text ---- */
++    if (big_title && l->title)
++        aui_text(AF_TITLE, 16, AUI_BAR + 2, 0x000000, l->title, AUI_W - 32, 0);
++    int big = AF_BIG;
 +    for (int r = 0; r < vis; r++)
 +    {
 +        int i = l->top + r;
 +        if (i >= l->count) break;
 +        int y = y0 + r * rh;
 +        bool s = (i == l->sel);
-+        int maxw = right - 18 - (l->chevrons ? 22 : 4);
++        int maxw = right - tx - (l->chevrons ? 26 : 6);
 +        buf[0] = sub[0] = '\0';
 +        l->get(l, i, buf, sizeof(buf), l->two_line ? sub : NULL, sizeof(sub));
 +        int st = l->style ? l->style(l, i) : 0;
@@ -1116,23 +1414,28 @@ index 0000000000..d396c34886
 +        if (st & AUI_ROW_ACTION)
 +        {
 +            int fh = aui_font_h(AF_MED);
-+            aui_text(AF_MED, (6 + right) / 2, y + (rh - fh) / 2, s ? t->seltext : t->accent,
++            unsigned ac = s ? c_sel : (sty == STY_MODERN ? 0x007aff : sty == STY_MOON ? 0xffe9a8
++                                       : ipod ? (dk ? 0x6ab4ff : 0x1a62c8) : t->accent);
++            aui_text(AF_MED, (tx + right) / 2 - (sty == STY_MODERN ? 8 : 0), y + (rh - fh) / 2, ac,
 +                     buf, right - 30, 1);
 +        }
 +        else if (l->two_line)
 +        {
-+            aui_text(AF_MED, 18, y + 5, s ? t->seltext : t->text, buf, maxw, 0);
-+            aui_text(AF_SMALLR, 18, y + 23, s ? 0xe6ecff : t->sub, sub, maxw, 0);
++            int h1 = aui_font_h(AF_MED), h2 = aui_font_h(AF_SMALLR);
++            int gap = (rh - h1 - h2) / 3;
++            aui_text(AF_MED, tx, y + gap, s ? c_sel : c_txt, buf, maxw, 0);
++            aui_text(AF_SMALLR, tx, y + 2 * gap + h1 - (sty == STY_MOON ? 2 : 0), s ? c_ssub : c_sub, sub, maxw, 0);
 +        }
 +        else
 +        {
-+            int fh = aui_font_h(AF_BIG);
-+            aui_text(AF_BIG, 18, y + (rh - fh) / 2, s ? t->seltext : t->text, buf, maxw, 0);
++            int fh = aui_font_h(big);
++            aui_text(big, tx, y + (rh - fh) / 2, s ? c_sel : c_txt, buf, maxw, 0);
 +        }
 +        if (st & AUI_ROW_CHECK)
 +        {
 +            /* a bold tick at the end of the row */
-+            unsigned cc = s ? 0xffffff : (t->modern ? 0x0a84ff : t->accent);
++            unsigned cc = s ? c_sel : (sty == STY_MODERN ? 0x007aff : sty == STY_MOON ? 0xffe9a8
++                                       : ipod ? (dk ? 0x6ab4ff : 0x1a62c8) : t->accent);
 +            int cw = 16, ch = 12;
 +            int cx = right - (l->chevrons ? 38 : 22) - cw / 2, cy = y + (rh - ch) / 2;
 +            int mx = cx + 6, my = cy + ch;
@@ -1149,10 +1452,11 @@ index 0000000000..d396c34886
 +    if (letter)
 +    {
 +        char lb[2] = { (char)letter, 0 };
-+        int fh = aui_font_h(AF_BIG);
-+        aui_text(AF_BIG, AUI_W / 2, 30 + (AUI_H - 30) / 2 - fh / 2, 0xffffff, lb, 0, 1);
++        int f = sty == STY_MODERN ? AF_TITLE : AF_BIG;
++        int fh = aui_font_h(f);
++        aui_text(f, AUI_W / 2, 30 + (AUI_H - 30) / 2 - fh / 2, 0xffffff, lb, 0, 1);
 +    }
-+    aui_topbar_text(l->title);
++    aui_topbar_text(big_title ? "" : l->title);
 +    aui_update();
 +}
 +
@@ -4542,10 +4846,10 @@ index 0000000000..5835081571
 +#endif
 diff --git a/apps/asher/asher_nowplaying.c b/apps/asher/asher_nowplaying.c
 new file mode 100644
-index 0000000000..c785a2d74f
+index 0000000000..b5b769ba8d
 --- /dev/null
 +++ b/apps/asher/asher_nowplaying.c
-@@ -0,0 +1,472 @@
+@@ -0,0 +1,743 @@
 +/* Asher OS Now Playing: album art, song + artist, play/pause status,
 + * kbps, elapsed / total time. The background is the album art blown up
 + * and blurred (or a soft colour blend when a song has no art). */
@@ -4584,6 +4888,7 @@ index 0000000000..c785a2d74f
 +static fb_data np_bg[LCD_WIDTH * LCD_HEIGHT];
 +static char np_key[MAX_PATH];      /* song the background was made for */
 +static bool np_key_art;            /* ... and whether it had art */
++static int np_key_kind = -1;       /* 0 Retro glass, 1 Modern (no panel, darker) */
 +static long np_since;              /* when that song first showed */
 +
 +static int sm[SH][SW][3];
@@ -4642,6 +4947,7 @@ index 0000000000..c785a2d74f
 +    }
 +}
 +
++static int np_keep = 170;
 +static void bg_from_art(const fb_data *src, int w, int h)
 +{
 +    /* centre crop to the screen's shape, averaged down to SW x SH */
@@ -4667,7 +4973,7 @@ index 0000000000..c785a2d74f
 +            sm[y][x][0] = r / n; sm[y][x][1] = g / n; sm[y][x][2] = b / n;
 +        }
 +    blur_small(3);
-+    upscale(170);                  /* a bit darker so the text stands out */
++    upscale(np_keep);              /* a bit darker so the text stands out */
 +}
 +
 +static void bg_no_art(void)
@@ -4695,12 +5001,14 @@ index 0000000000..c785a2d74f
 +}
 +
 +/* returns true when the background was (re)made */
-+static bool np_background(struct mp3entry *id3)
++static bool np_background(struct mp3entry *id3, int kind)
 +{
 +    const fb_data *art; int w, h;
 +    bool has = aui_albumart_bitmap(&art, &w, &h);
 +    const char *key = id3 ? id3->path : "";
 +    bool same = !strcmp(key, np_key);
++    if (kind != np_key_kind) { np_key[0] = '\0'; np_key_kind = kind; same = false; }
++    np_keep = kind == 1 ? 120 : 170;
 +    if (!same) np_since = current_tick;
 +    if (same && has == np_key_art) return false;
 +    if (same && !has) return false;        /* art went away: keep what we have */
@@ -4708,6 +5016,7 @@ index 0000000000..c785a2d74f
 +    np_key_art = has;
 +    if (has) bg_from_art(art, w, h);
 +    else     bg_no_art();
++    if (kind == 1) return true;
 +    /* bake the dark glass panel in once, not on every redraw (battery) */
 +    memcpy(aui_fb, np_bg, sizeof(np_bg));
 +    aui_shade(8, AUI_BAR + 6, AUI_W - 16, AUI_H - AUI_BAR - 12, 14, 200, 0x05060f);
@@ -4742,89 +5051,352 @@ index 0000000000..c785a2d74f
 +    strlcpy(l2, s + best, n);
 +}
 +
-+/* Modern: the blurred colour blend behind a frosted white card, and the
-+ * player bar look: red progress with a knob, grey buttons under it */
-+static void draw_modern(const struct amedia *m, bool show_shuf)
++/* ------------------------------------------------------------------ */
++/* what every look needs to know                                       */
++/* ------------------------------------------------------------------ */
++struct npi {
++    struct mp3entry *id3;
++    bool playing, paused, vol;
++    long pos, len;
++};
++static void np_info(const struct amedia *m, struct npi *n)
 +{
-+    struct mp3entry *id3 = asher_track();
++    n->id3 = asher_track();
 +    int st = audio_status();
-+    bool playing = (st & AUDIO_STATUS_PLAY) && id3;
-+    bool paused = st & AUDIO_STATUS_PAUSE;
-+    bool show_vol = asher_media_show_vol(m);
-+    char l1[160], l2[160], buf[48], b2[16];
-+    long pos = playing ? (m->seeking ? m->seek_pos : (long)id3->elapsed) : 0;
-+    long len = playing ? (long)id3->length : 0;
-+    const int AX = 22, AY = AUI_BAR + 16, AS = 104, TX = AX + AS + 14, TW = AUI_W - TX - 22;
++    n->playing = (st & AUDIO_STATUS_PLAY) && n->id3;
++    n->paused = st & AUDIO_STATUS_PAUSE;
++    n->vol = asher_media_show_vol(m);
++    n->pos = n->playing ? (m->seeking ? m->seek_pos : (long)n->id3->elapsed) : 0;
++    n->len = n->playing ? (long)n->id3->length : 0;
++    if (n->pos > n->len && n->len > 0) n->pos = n->len;
++}
++static const char *np_artist(struct mp3entry *id3)
++{
++    return (id3->artist && id3->artist[0]) ? id3->artist
++         : (id3->albumartist && id3->albumartist[0]) ? id3->albumartist : "Unknown Artist";
++}
++static const char *np_album(struct mp3entry *id3)
++{
++    return (id3->album && id3->album[0]) ? id3->album : "";
++}
++static void remaining(char *buf, size_t n, long pos, long len)
++{
++    char t[16];
++    aui_fmt_time(t, sizeof(t), len - pos);
++    snprintf(buf, n, "-%s", t);
++}
 +
-+    if (!aui_sprite_fill(SPR_M_NPBG))
-+        aui_vgrad(0, 0, AUI_W, AUI_H, 0xb48cff, 0x6aa0ff);
++/* ------------------------------------------------------------------ */
++/* Original / Dark: the iPod's own Now Playing                         */
++/* ------------------------------------------------------------------ */
++static void ipod_bar(int x, int y, int w, int h, long p, long q, bool dk)
++{
++    aui_round(x, y, w, h, 2, dk ? 0x5c6068 : 0x80868f, dk ? 0x5c6068 : 0x80868f);
++    aui_vgrad(x + 1, y + 1, w - 2, h - 2, dk ? 0x1b1c20 : 0xffffff, dk ? 0x2b2d32 : 0xdfe2e7);
++    int f = q > 0 ? (int)((long long)(w - 2) * MIN(p, q) / q) : 0;
++    if (f > 0)
++    {
++        aui_vgrad(x + 1, y + 1, f, h - 2, dk ? 0x7cbcf7 : 0x8cc6fb, dk ? 0x1450b4 : 0x1b67d4);
++        aui_shade(x + 1, y + 1, f, (h - 2) / 2, 0, 170, 0xffffff);
++    }
++}
++static void draw_ipod(const struct amedia *m, bool show_shuf, bool dk)
++{
++    struct npi n;
++    np_info(m, &n);
++    const int AX = 14, AY = AUI_BAR + 10, AS = 118, TX = AX + AS + 12, TW = AUI_W - TX - 10;
++    unsigned bg_t = dk ? 0x1a1b1f : 0xffffff, bg_b = dk ? 0x000000 : 0xe6e8ec;
++    char l1[160], l2[160], buf[48];
++
++    aui_vgrad(0, 0, AUI_W, AUI_H, bg_t, bg_b);
 +    aui_topbar();
-+    aui_shade(10, AUI_BAR + 6, AUI_W - 20, AUI_H - AUI_BAR - 12, 18, 70, 0xffffff);
-+    /* art */
++    /* the cover, with a soft edge and its reflection under it */
++    aui_fill(AX - 1, AY - 1, AS + 2, AS + 2, dk ? 0x2e3036 : 0xb8bcc4);
 +    if (!aui_albumart_scaled(AX, AY, AS))
 +    {
-+        aui_round(AX, AY, AS, AS, 12, 0xff5e6c, 0xfa2346);
++        aui_vgrad(AX, AY, AS, AS, dk ? 0x3a3d45 : 0xf1f2f5, dk ? 0x1b1c20 : 0xc9cdd5);
 +        aui_sprite_c(SPR_NOTE, AX + AS / 2, AY + AS / 2);
 +    }
-+    /* progress (or volume): grey track, red fill and knob */
-+    int bx = 26, by = AY + AS + 16, bw = AUI_W - 26 - 76;
-+    long p = show_vol ? aui_volume_pct() : pos, q = show_vol ? 100 : (len > 0 ? len : 1);
-+    int fill = (int)((long long)bw * MIN(p, q) / q);
-+    aui_round(bx, by, bw, 6, 3, 0xc7c7cc, 0xc7c7cc);
-+    if (fill > 0) aui_round(bx, by, MAX(6, fill), 6, 3, 0xed1c24, 0xed1c24);
-+    aui_round(bx + fill - 6, by - 3, 12, 12, 6, 0xed1c24, 0xed1c24);
-+    /* buttons */
-+    int cy = by + 34;
-+    aui_sprite_c(SPR_M_NP_REW, AUI_W / 2 - 96, cy);
-+    aui_sprite_c(SPR_M_NP_PREV, AUI_W / 2 - 50, cy);
-+    aui_sprite_c((playing && !paused) ? SPR_M_NP_PAUSE : SPR_M_NP_PLAY, AUI_W / 2, cy);
-+    aui_sprite_c(SPR_M_NP_NEXT, AUI_W / 2 + 50, cy);
-+    aui_sprite_c(SPR_M_NP_FF, AUI_W / 2 + 96, cy);
++    aui_reflect(AX, AY, AS, AS, 34, dk ? 70 : 90);
++    /* time or volume, full width at the bottom */
++    int by = 204;
++    if (n.vol)
++    {
++        /* speaker small ... speaker loud, like the iPod */
++        unsigned ic = dk ? 0xc9ccd3 : 0x50555e;
++        aui_fill(AX, by + 1, 3, 6, ic);
++        for (int k = 0; k < 4; k++) aui_fill(AX + 3 + k, by + 2 - k, 1, 4 + 2 * k, ic);
++        ipod_bar(AX + 14, by, AUI_W - 2 * AX - 36, 9, aui_volume_pct(), 100, dk);
++        int ex = AUI_W - AX - 14;
++        aui_fill(ex, by + 1, 3, 6, ic);
++        for (int k = 0; k < 4; k++) aui_fill(ex + 3 + k, by + 2 - k, 1, 4 + 2 * k, ic);
++        aui_fill(ex + 9, by - 1, 1, 10, ic);
++        aui_fill(ex + 11, by - 3, 1, 14, ic);
++    }
++    else
++        ipod_bar(AX, by, AUI_W - 2 * AX, 9, n.pos, n.playing ? n.len : 1, dk);
++    if (m->seeking && n.len > 0 && !n.vol)
++    {
++        /* the scrubbing diamond */
++        int dx = AX + (int)((long long)(AUI_W - 2 * AX) * n.pos / n.len);
++        for (int k = 0; k < 7; k++)
++            aui_fill(dx - k, by - 2 + k, 2 * k + 1, 1, dk ? 0xffffff : 0x1d1f24),
++            aui_fill(dx - k, by + 12 - k, 2 * k + 1, 1, dk ? 0xffffff : 0x1d1f24);
++    }
 +    aui_present();
 +
-+    const unsigned tc = 0x1c1c1e, sc = 0x6e6e78;
-+    if (playing)
++    unsigned tc = dk ? 0xffffff : 0x000000, sc = dk ? 0xc2c5cc : 0x3a3d44, gc = dk ? 0x8e929b : 0x6b6f78;
++    if (n.playing)
 +    {
-+        aui_text(AF_SMALL, TX, AY + 2, paused ? 0xff9500 : 0xed1c24,
-+                 paused ? "PAUSED" : "NOW PLAYING", TW, 0);
-+        wrap2(track_title(id3), AF_BIG, TW, l1, l2, sizeof(l1));
-+        aui_text(AF_BIG, TX, AY + 20, tc, l1, TW, 0);
-+        int y = AY + 42;
-+        if (l2[0]) { aui_text(AF_BIG, TX, y, tc, l2, TW, 0); y += 22; }
-+        aui_text(AF_MED, TX, y + 2, sc,
-+                 (id3->artist && id3->artist[0]) ? id3->artist : "Unknown Artist", TW, 0);
-+        aui_text(AF_SMALLR, TX, AY + AS - 14,
-+                 global_settings.playlist_shuffle ? 0x007aff : sc,
-+                 show_shuf ? (global_settings.playlist_shuffle ? "Shuffle turned on" : "Shuffle turned off")
-+                           : (global_settings.playlist_shuffle ? "Shuffle On" : "Shuffle Off"), TW, 0);
-+    }
-+    else
-+    {
-+        aui_text(AF_SMALL, TX, AY + 2, sc, "NOT PLAYING", TW, 0);
-+        aui_text(AF_BIG, TX, AY + 20, tc, "Nothing playing", TW, 0);
-+        aui_text(AF_SMALLR, TX, AY + 46, sc, "Pick something in Music", TW, 0);
-+    }
-+    if (show_vol)
-+        snprintf(buf, sizeof(buf), "%d%%", aui_volume_pct());
-+    else
-+    {
-+        aui_fmt_time(buf, sizeof(buf), pos);
-+        aui_fmt_time(b2, sizeof(b2), len);
-+        strlcat(buf, "/", sizeof(buf));
-+        strlcat(buf, b2, sizeof(buf));
-+        if (!playing) strlcpy(buf, "0:00", sizeof(buf));
-+    }
-+    aui_text(AF_SMALLR, AUI_W - 22, by - 5, sc, buf, 70, 2);
-+    if (playing)
-+    {
-+        /* the song after this one, under the buttons */
++        int cnt = playlist_amount();
++        if (cnt > 0)
++        {
++            snprintf(buf, sizeof(buf), "%d of %d", playlist_get_display_index(), cnt);
++            aui_text(AF_SMALLR, TX, AY - 2, gc, buf, TW, 0);
++        }
++        wrap2(track_title(n.id3), AF_BIG, TW, l1, l2, sizeof(l1));
++        int y = AY + 16;
++        aui_text(AF_BIG, TX, y, tc, l1, TW, 0);
++        y += aui_font_h(AF_BIG);
++        if (l2[0]) { aui_text(AF_BIG, TX, y, tc, l2, TW, 0); y += aui_font_h(AF_BIG); }
++        y += 4;
++        aui_text(AF_MED, TX, y, sc, np_artist(n.id3), TW, 0);
++        y += aui_font_h(AF_MED) + 1;
++        aui_text(AF_SMALLR, TX, y, gc, np_album(n.id3), TW, 0);
++        /* bottom of the column: shuffle, then what's next */
 +        char nx[120], line[140];
 +        bool q = false;
++        unsigned blue = dk ? 0x6ab4ff : 0x1a62c8;
++        if (show_shuf)
++            aui_text(AF_SMALL, TX, AY + AS - 30, blue,
++                     global_settings.playlist_shuffle ? "Shuffle turned on" : "Shuffle turned off", TW, 0);
++        else if (global_settings.playlist_shuffle)
++            aui_text(AF_SMALLR, TX, AY + AS - 30, blue, "Shuffle On", TW, 0);
 +        if (asher_up_next(nx, sizeof(nx), &q))
 +        {
-+            snprintf(line, sizeof(line), "%s: %s", q ? "Queued next" : "Up next", nx);
-+            aui_text(AF_SMALLR, AUI_W / 2, cy + 20, q ? 0x007aff : sc, line, AUI_W - 40, 1);
++            snprintf(line, sizeof(line), "%s %s", q ? "Queued:" : "Next:", nx);
++            aui_text(AF_SMALLR, TX, AY + AS - 14, q ? blue : gc, line, TW, 0);
 +        }
++    }
++    else
++    {
++        aui_text(AF_BIG, TX, AY + 16, tc, "Not Playing", TW, 0);
++        aui_text(AF_SMALLR, TX, AY + 40, gc, "Choose a song in Music", TW, 0);
++    }
++    if (n.vol)
++    {
++        snprintf(buf, sizeof(buf), "Volume %d%%", aui_volume_pct());
++        aui_text(AF_SMALLR, AUI_W / 2, by + 13, sc, buf, 200, 1);
++    }
++    else if (n.playing)
++    {
++        aui_fmt_time(buf, sizeof(buf), n.pos);
++        aui_text(AF_SMALLR, AX, by + 12, sc, buf, 100, 0);
++        remaining(buf, sizeof(buf), n.pos, n.len);
++        aui_text(AF_SMALLR, AUI_W - AX, by + 12, sc, buf, 100, 2);
++    }
++    aui_topbar_text("Now Playing");
++    aui_update();
++}
++
++/* ------------------------------------------------------------------ */
++/* Modern 2026: the cover's colours fill the screen, white type on top */
++/* ------------------------------------------------------------------ */
++static void md_skip(int cx, int cy, int dir, unsigned c)
++{
++    /* two triangles and a bar, like a phone's skip buttons */
++    int s = 7;
++    for (int k = 0; k < 2; k++)
++    {
++        int bx = cx + dir * (k * 2 * s - s);
++        aui_aa_tri(bx * 16, (cy - s) * 16, bx * 16, (cy + s) * 16, (bx + dir * 2 * s) * 16 - dir * 8, cy * 16, c);
++    }
++}
++static void draw_modern(const struct amedia *m, bool show_shuf)
++{
++    struct npi n;
++    np_info(m, &n);
++    const int AX = 18, AY = AUI_BAR + 8, AS = 108, TX = AX + AS + 14, TW = AUI_W - TX - 16;
++    char l1[160], l2[160], buf[48];
++
++    np_background(n.playing ? n.id3 : NULL, 1);
++    memcpy(aui_fb, np_bg, sizeof(np_bg));
++    aui_bar_dark = true;
++    aui_topbar();
++    /* cover with a soft shadow and round corners */
++    aui_shade(AX - 2, AY + 2, AS + 4, AS + 4, 14, 150, 0x000000);
++    if (!aui_albumart_scaled(AX, AY, AS))
++    {
++        aui_round(AX, AY, AS, AS, 12, 0x3a3a3c, 0x1c1c1e);
++        aui_sprite_c(SPR_NOTE, AX + AS / 2, AY + AS / 2);
++    }
++    else
++        aui_corners(AX, AY, AS, AS, 12, np_bg, 0);
++    /* scrubber */
++    int sx = 18, sw = AUI_W - 36, sy = AY + AS + 22;
++    long p = n.vol ? aui_volume_pct() : n.pos, q = n.vol ? 100 : (n.len > 0 ? n.len : 1);
++    int f = (int)((long long)sw * MIN(p, q) / q);
++    aui_shade(sx, sy, sw, m->seeking ? 7 : 5, 3, 170, 0xffffff);
++    if (f > 0) aui_round(sx, sy, MAX(f, 5), m->seeking ? 7 : 5, 3, 0xffffff, 0xffffff);
++    /* controls */
++    int cy = AUI_H - 22;
++    unsigned w = 0xffffff;
++    md_skip(AUI_W / 2 - 70, cy, -1, w);
++    md_skip(AUI_W / 2 + 70, cy, 1, w);
++    if (n.playing && !n.paused)
++    {
++        aui_round(AUI_W / 2 - 9, cy - 11, 7, 22, 2, w, w);
++        aui_round(AUI_W / 2 + 3, cy - 11, 7, 22, 2, w, w);
++    }
++    else
++        aui_aa_tri((AUI_W / 2 - 8) * 16, (cy - 12) * 16, (AUI_W / 2 - 8) * 16, (cy + 12) * 16,
++                   (AUI_W / 2 + 13) * 16, cy * 16, w);
++    /* shuffle, bottom left: lit when on */
++    {
++        unsigned sc = global_settings.playlist_shuffle ? 0xffffff : 0x8a8a90;
++        int x = 22, y = cy - 6;
++        if (global_settings.playlist_shuffle) aui_shade(x - 6, y - 6, 30, 24, 8, 190, 0xffffff);
++        aui_aa_line16(x * 16, y * 16, (x + 16) * 16, (y + 12) * 16, 26, sc);
++        aui_aa_line16(x * 16, (y + 12) * 16, (x + 16) * 16, y * 16, 26, sc);
++        aui_aa_tri((x + 13) * 16, (y - 3) * 16, (x + 19) * 16, y * 16, (x + 13) * 16, (y + 3) * 16, sc);
++        aui_aa_tri((x + 13) * 16, (y + 9) * 16, (x + 19) * 16, (y + 12) * 16, (x + 13) * 16, (y + 15) * 16, sc);
++    }
++    aui_present();
++
++    unsigned tc = 0xffffff, sc = 0xd9d9de, gc = 0xa9a9b2;
++    if (n.playing)
++    {
++        wrap2(track_title(n.id3), AF_BIG, TW, l1, l2, sizeof(l1));
++        int y = AY + 4;
++        aui_text(AF_BIG, TX, y, tc, l1, TW, 0);
++        y += aui_font_h(AF_BIG);
++        if (l2[0]) { aui_text(AF_BIG, TX, y, tc, l2, TW, 0); y += aui_font_h(AF_BIG); }
++        y += 2;
++        aui_text(AF_MED, TX, y, sc, np_artist(n.id3), TW, 0);
++        y += aui_font_h(AF_MED) + 1;
++        aui_text(AF_SMALLR, TX, y, gc, np_album(n.id3), TW, 0);
++        char nx[120], line[140];
++        bool qd = false;
++        if (show_shuf)
++            aui_text(AF_SMALL, TX, AY + AS - 16, tc,
++                     global_settings.playlist_shuffle ? "Shuffle on" : "Shuffle off", TW, 0);
++        else if (asher_up_next(nx, sizeof(nx), &qd))
++        {
++            aui_text(AF_SMALL, TX, AY + AS - 32, gc, qd ? "QUEUED" : "UP NEXT", TW, 0);
++            snprintf(line, sizeof(line), "%s", nx);
++            aui_text(AF_SMALLR, TX, AY + AS - 16, sc, line, TW, 0);
++        }
++    }
++    else
++    {
++        aui_text(AF_BIG, TX, AY + 4, tc, "Not Playing", TW, 0);
++        aui_text(AF_SMALLR, TX, AY + 30, gc, "Pick something in Music", TW, 0);
++    }
++    int ty = sy + 10;
++    if (n.vol)
++    {
++        snprintf(buf, sizeof(buf), "Volume  %d%%", aui_volume_pct());
++        aui_text(AF_SMALLR, AUI_W / 2, ty, sc, buf, 200, 1);
++    }
++    else
++    {
++        aui_fmt_time(buf, sizeof(buf), n.pos);
++        aui_text(AF_SMALLR, sx, ty, gc, buf, 80, 0);
++        remaining(buf, sizeof(buf), n.pos, n.len);
++        aui_text(AF_SMALLR, sx + sw, ty, gc, n.playing ? buf : "-0:00", 80, 2);
++    }
++    aui_topbar_text("Now Playing");
++    aui_bar_dark = false;
++    aui_update();
++}
++
++/* ------------------------------------------------------------------ */
++/* MoonPod: pixel night                                                */
++/* ------------------------------------------------------------------ */
++static void draw_moon(const struct amedia *m, bool show_shuf)
++{
++    struct npi n;
++    np_info(m, &n);
++    const int AX = 16, AY = AUI_BAR + 12, AS = 112, TX = AX + AS + 16, TW = AUI_W - TX - 10;
++    char l1[160], l2[160], buf[48];
++
++    aui_night_sky(0, AUI_H);
++    /* low hills along the bottom */
++    for (int x = 0; x < AUI_W; x += 2)
++    {
++        int h = 10 + ((x * 7) % 23 < 12 ? (x * 7) % 23 / 3 : (23 - (x * 7) % 23) / 3) + (x > 180 && x < 260 ? (40 - (x - 220 < 0 ? 220 - x : x - 220)) / 4 : 0);
++        aui_fill(x, AUI_H - h, 2, h, 0x0a0712);
++    }
++    aui_topbar();
++    /* the cover, framed like a game cartridge label */
++    aui_fill(AX + 4, AY + 4, AS + 8, AS + 8, 0x05040a);                  /* hard shadow */
++    aui_px_box(AX - 4, AY - 4, AS + 8, AS + 8, 0x1a1230, 0xb9a7ff);
++    if (!aui_albumart_scaled(AX, AY, AS))
++    {
++        aui_fill(AX, AY, AS, AS, 0x1a1230);
++        aui_moon_disc(AX + AS / 2 - 20, AY + AS / 2 - 20, 40, 0xe9e3d3, 0x2c2440);
++    }
++    /* progress: chunky cells with a little moon riding along */
++    int bx = 16, bw = AUI_W - 32, by = 196, cells = 24, cw = bw / cells;
++    long p = n.vol ? aui_volume_pct() : n.pos, q = n.vol ? 100 : (n.len > 0 ? n.len : 1);
++    int on = (int)((long long)cells * MIN(p, q) / q);
++    for (int i = 0; i < cells; i++)
++        aui_fill(bx + i * cw, by, cw - 2, 6, i < on ? (n.vol ? 0xffe9a8 : 0xb9a7ff) : 0x2c2440);
++    {
++        int kx = bx + (int)((long long)(cells * cw - 2) * MIN(p, q) / q);
++        static const char *const knob[] = {
++            "..####..", ".######.", "####.###", "########", "###.####", "########", ".######.", "..####.." };
++        aui_pix(knob, 8, kx - 3, by, 0x050408);
++        aui_pix(knob, 8, kx - 4, by - 1, 0xe9e3d3);
++    }
++    aui_present();
++
++    unsigned tc = 0xe9e3d3, lv = 0xb9a7ff, gc = 0x8d84a8, yl = 0xffe9a8;
++    if (n.playing)
++    {
++        aui_text(AF_SMALL, TX, AY - 4, n.paused ? gc : yl, n.paused ? "- PAUSED -" : "NOW PLAYING", TW, 0);
++        wrap2(track_title(n.id3), AF_BIG, TW, l1, l2, sizeof(l1));
++        int y = AY + 12;
++        aui_text(AF_BIG, TX + 1, y + 1, 0x000000, l1, TW, 0);
++        aui_text(AF_BIG, TX, y, tc, l1, TW, 0);
++        y += aui_font_h(AF_BIG) - 2;
++        if (l2[0]) { aui_text(AF_BIG, TX, y, tc, l2, TW, 0); y += aui_font_h(AF_BIG) - 2; }
++        aui_text(AF_MED, TX, y + 2, lv, np_artist(n.id3), TW, 0);
++        y += aui_font_h(AF_MED) + 2;
++        aui_text(AF_SMALLR, TX, y, gc, np_album(n.id3), TW, 0);
++        char nx[120], line[140];
++        bool qd = false;
++        if (show_shuf)
++            aui_text(AF_SMALL, TX, AY + AS - 16, yl,
++                     global_settings.playlist_shuffle ? "* shuffle on *" : "* shuffle off *", TW, 0);
++        else
++        {
++            if (global_settings.playlist_shuffle)
++                aui_text(AF_SMALLR, TX, AY + AS - 32, yl, "shuffle on", TW, 0);
++            if (asher_up_next(nx, sizeof(nx), &qd))
++            {
++                snprintf(line, sizeof(line), "%s %s", qd ? "queued>" : "next>", nx);
++                aui_text(AF_SMALLR, TX, AY + AS - 16, gc, line, TW, 0);
++            }
++        }
++    }
++    else
++    {
++        aui_text(AF_BIG, TX, AY + 12, tc, "Quiet night", TW, 0);
++        aui_text(AF_SMALLR, TX, AY + 40, gc, "pick a song in Music", TW, 0);
++    }
++    int ty = by + 10;
++    if (n.vol)
++    {
++        snprintf(buf, sizeof(buf), "VOLUME %d%%", aui_volume_pct());
++        aui_text(AF_SMALLR, AUI_W / 2, ty, yl, buf, 200, 1);
++    }
++    else
++    {
++        aui_fmt_time(buf, sizeof(buf), n.pos);
++        aui_text(AF_SMALLR, bx, ty, tc, buf, 80, 0);
++        remaining(buf, sizeof(buf), n.pos, n.len);
++        aui_text(AF_SMALLR, bx + bw, ty, tc, n.playing ? buf : "-0:00", 80, 2);
 +    }
 +    aui_topbar_text("Now Playing");
 +    aui_update();
@@ -4842,8 +5414,11 @@ index 0000000000..c785a2d74f
 +    long pos = playing ? (m->seeking ? m->seek_pos : (long)id3->elapsed) : 0;
 +    long len = playing ? (long)id3->length : 0;
 +
-+    if (t->modern) { draw_modern(m, show_shuf); return; }
-+    np_background(playing ? id3 : NULL);
++    int sty = aui_style();
++    if (sty == STY_MODERN) { draw_modern(m, show_shuf); return; }
++    if (sty == STY_ORIG || sty == STY_DARK) { draw_ipod(m, show_shuf, sty == STY_DARK); return; }
++    if (sty == STY_MOON) { draw_moon(m, show_shuf); return; }
++    np_background(playing ? id3 : NULL, 0);
 +    memcpy(aui_fb, np_bg, sizeof(np_bg));
 +    aui_topbar();
 +
@@ -5530,10 +6105,10 @@ index 0000000000..8ff3b022d0
 +#endif
 diff --git a/apps/asher/asher_quick.c b/apps/asher/asher_quick.c
 new file mode 100644
-index 0000000000..37f5498e14
+index 0000000000..86c6bcc319
 --- /dev/null
 +++ b/apps/asher/asher_quick.c
-@@ -0,0 +1,324 @@
+@@ -0,0 +1,419 @@
 +/* Asher OS "hold Menu" extras.
 + *  - asher_music_mode(): everywhere except Now Playing and Stats (Home,
 + *    Music lists, Settings...): a music control panel with shuffle, until
@@ -5589,9 +6164,36 @@ index 0000000000..37f5498e14
 +    aui_dirty = true;       /* screens underneath redraw themselves */
 +}
 +
++/* 2.7: each look has its own pop-up card */
 +static void card(int x, int y, int w, int h, unsigned *fg, unsigned *sub)
 +{
 +    const struct aui_theme *t = aui_theme();
++    switch (aui_style())
++    {
++        case STY_ORIG:
++        case STY_DARK:
++        {
++            bool dk = aui_style() == STY_DARK;
++            aui_round(x - 1, y - 1, w + 2, h + 2, 9, dk ? 0x5c6068 : 0x6f757e, dk ? 0x34363c : 0x6f757e);
++            aui_round(x, y, w, h, 8, dk ? 0x1d1e22 : 0xffffff, dk ? 0x0c0c0e : 0xe7e9ed);
++            /* a title strip like the iPod's bar */
++            aui_round(x, y, w, 24, 8, dk ? 0x55585f : 0xfdfdfe, dk ? 0x2b2d32 : 0xd6dae0);
++            aui_fill(x, y + 16, w, 8, dk ? 0x2b2d32 : 0xd6dae0);
++            aui_fill(x, y + 24, w, 1, dk ? 0x000000 : 0x9aa0a8);
++            *fg = dk ? 0xffffff : 0x000000; *sub = dk ? 0xa9adb5 : 0x5d6372;
++            return;
++        }
++        case STY_MODERN:
++            aui_shade(x, y, w, h, 22, 28, 0x1c1c1e);
++            *fg = 0xffffff; *sub = 0xaeaeb2;
++            return;
++        case STY_MOON:
++            aui_fill(x + 4, y + 4, w, h, 0x000000);
++            aui_px_box(x, y, w, h, 0x0d0a17, 0xb9a7ff);
++            aui_fill(x + 2, y + 2, w - 4, 1, 0x3a2a5c);
++            *fg = 0xe9e3d3; *sub = 0x8d84a8;
++            return;
++    }
 +    if (t->light)
 +    {
 +        aui_round(x, y, w, h, 14, 0xffffff, 0xf4f4f8);
@@ -5603,6 +6205,71 @@ index 0000000000..37f5498e14
 +        aui_round(x, y, w, h, 14, 0x1d2040, 0x111326);
 +        *fg = 0xffffff; *sub = 0xb4bad8;
 +    }
++}
++static unsigned q_accent(void)
++{
++    switch (aui_style())
++    {
++        case STY_ORIG: return 0x000000;
++        case STY_DARK: return 0xffffff;
++        case STY_MODERN: return 0xff375f;
++        case STY_MOON: return 0xffe9a8;
++    }
++    return aui_theme()->accent;
++}
++/* where the header text goes: centred in the iPod's strip, else top left */
++static void q_title(int x, int y, int w, const char *s)
++{
++    int sty = aui_style();
++    if (sty == STY_ORIG || sty == STY_DARK)
++        aui_text(AF_SMALL, x + w / 2, y + (24 - aui_font_h(AF_SMALL)) / 2, q_accent(), s, w - 16, 1);
++    else
++        aui_text(AF_SMALL, x + 16, y + 10, q_accent(), s, w - 32, 0);
++}
++static unsigned q_seltext(void) { return aui_style() == STY_MODERN ? 0x000000 : 0xffffff; }
++static void q_sel(int x, int y, int w, int h)
++{
++    const struct aui_theme *t = aui_theme();
++    switch (aui_style())
++    {
++        case STY_ORIG: case STY_DARK:
++            aui_vgrad(x, y, w, h, 0x6fb3f7, 0x1b67d4);
++            return;
++        case STY_MODERN:
++            aui_round(x, y, w, h, 12, 0xffffff, 0xffffff);
++            return;
++        case STY_MOON:
++            aui_px_box(x, y, w, h, 0x2a1a4a, 0xb9a7ff);
++            return;
++    }
++    aui_round(x, y, w, h, 10, t->sel1, t->sel2);
++}
++static void q_bar(int x, int y, int w, int h, long p, long q)
++{
++    if (q <= 0) q = 1;
++    int f = (int)((long long)w * MIN(MAX(p, 0), q) / q);
++    switch (aui_style())
++    {
++        case STY_ORIG: case STY_DARK:
++        {
++            bool dk = aui_style() == STY_DARK;
++            aui_fill(x, y, w, h, dk ? 0x5c6068 : 0x80868f);
++            aui_vgrad(x + 1, y + 1, w - 2, h - 2, dk ? 0x1b1c20 : 0xffffff, dk ? 0x2b2d32 : 0xdfe2e7);
++            if (f > 2) aui_vgrad(x + 1, y + 1, f - 2, h - 2, 0x8cc6fb, 0x1b67d4);
++            return;
++        }
++        case STY_MODERN:
++            aui_round(x, y, w, 5, 2, 0x636366, 0x636366);
++            if (f > 0) aui_round(x, y, MAX(5, f), 5, 2, 0xffffff, 0xffffff);
++            return;
++        case STY_MOON:
++        {
++            int n = w / 10, on = (int)((long long)n * MIN(MAX(p, 0), q) / q);
++            for (int i = 0; i < n; i++) aui_fill(x + i * 10, y, 8, h, i < on ? 0xb9a7ff : 0x2c2440);
++            return;
++        }
++    }
++    aui_progress(x, y, w, h, p, q);
 +}
 +
 +/* ------------------------------------------------------------------ */
@@ -5622,15 +6289,20 @@ index 0000000000..37f5498e14
 +    long pos = playing ? (m->seeking ? m->seek_pos : (long)id3->elapsed) : 0;
 +    bool vol = asher_media_show_vol(m);
 +    if (vol)
-+        aui_progress(x + 14, y + 72, w - 28, 7, aui_volume_pct(), 100);
++        q_bar(x + 14, y + 72, w - 28, 7, aui_volume_pct(), 100);
 +    else
-+        aui_progress(x + 14, y + 72, w - 28, 7, pos, playing ? (long)id3->length : 1);
++        q_bar(x + 14, y + 72, w - 28, 7, pos, playing ? (long)id3->length : 1);
 +    aui_present();
 +
-+    aui_text(AF_SMALL, x + 14, y + 8, aui_theme()->accent,
-+             !playing ? "MUSIC CONTROLS" : (st & AUDIO_STATUS_PAUSE) ? "MUSIC CONTROLS - PAUSED"
-+                                                                      : "MUSIC CONTROLS - PLAYING",
-+             w - 28, 0);
++    {
++        int sty = aui_style();
++        bool ip = sty == STY_ORIG || sty == STY_DARK;
++        const char *t1 = !playing ? (ip ? "Music Controls" : "MUSIC CONTROLS")
++                       : (st & AUDIO_STATUS_PAUSE) ? (ip ? "Music Controls - Paused" : "MUSIC CONTROLS - PAUSED")
++                                                   : (ip ? "Music Controls - Playing" : "MUSIC CONTROLS - PLAYING");
++        if (ip) aui_text(AF_SMALL, x + w / 2, y + (24 - aui_font_h(AF_SMALL)) / 2, q_accent(), t1, w - 16, 1);
++        else aui_text(AF_SMALL, x + 14, y + 8, q_accent(), t1, w - 28, 0);
++    }
 +    if (playing)
 +    {
 +        const char *title = (id3->title && id3->title[0]) ? id3->title : strrchr(id3->path, '/') + 1;
@@ -5652,7 +6324,7 @@ index 0000000000..37f5498e14
 +        aui_text(AF_BIG, x + 14, y + 30, fg, "Nothing playing", w - 28, 0);
 +    aui_text(AF_SMALLR, x + w - 14, y + 84, sub, "hold Menu: back", 140, 2);
 +    /* 2.5.8: shuffle right here too (centre switches it) */
-+    aui_text(AF_SMALL, x + 14, y + 106, aui_theme()->accent,
++    aui_text(AF_SMALL, x + 14, y + 106, aui_style() == STY_ORIG ? 0x1a62c8 : aui_style() == STY_DARK ? 0x6ab4ff : q_accent(),
 +             global_settings.playlist_shuffle ? "Shuffle: On" : "Shuffle: Off", 150, 0);
 +    aui_text(AF_SMALLR, x + w - 14, y + 106, sub, "centre: shuffle", 140, 2);
 +    aui_update();
@@ -5713,7 +6385,6 @@ index 0000000000..37f5498e14
 +
 +static void sm_draw(int row, int shuf, int rep)
 +{
-+    const struct aui_theme *t = aui_theme();
 +    unsigned fg, sub;
 +    int x = 30, y = 60, w = AUI_W - 60, h = 140, rh = 38;
 +
@@ -5721,13 +6392,13 @@ index 0000000000..37f5498e14
 +    card(x, y, w, h, &fg, &sub);
 +    for (int r = 0; r < 2; r++)
 +        if (r == row)
-+            aui_round(x + 8, y + 34 + r * rh, w - 16, rh - 4, 10, t->sel1, t->sel2);
++            q_sel(x + 8, y + 34 + r * rh, w - 16, rh - 4);
 +    aui_present();
-+    aui_text(AF_SMALL, x + 16, y + 10, t->accent, "PLAYBACK", w - 32, 0);
++    q_title(x, y, w, "PLAYBACK");
 +    for (int r = 0; r < 2; r++)
 +    {
 +        int yy = y + 34 + r * rh + 8;
-+        unsigned c = r == row ? 0xffffff : fg;
++        unsigned c = r == row ? q_seltext() : fg;
 +        aui_text(AF_MED, x + 20, yy, c, r ? "Repeat" : "Shuffle", 100, 0);
 +        char v[24];
 +        snprintf(v, sizeof(v), "< %s >", r ? rep_names[rep] : shuf_names[shuf]);
@@ -5799,7 +6470,6 @@ index 0000000000..37f5498e14
 +static void pop_draw(const char *title, const char *line, const char *const *items,
 +                     int n, int row)
 +{
-+    const struct aui_theme *t = aui_theme();
 +    unsigned fg, sub;
 +    int rh = 38, w = AUI_W - 60, h = 64 + n * rh + 22;
 +    int x = 30, y = (AUI_H - h) / 2 + 10;
@@ -5808,12 +6478,12 @@ index 0000000000..37f5498e14
 +    card(x, y, w, h, &fg, &sub);
 +    for (int r = 0; r < n; r++)
 +        if (r == row)
-+            aui_round(x + 8, y + 56 + r * rh, w - 16, rh - 4, 10, t->sel1, t->sel2);
++            q_sel(x + 8, y + 56 + r * rh, w - 16, rh - 4);
 +    aui_present();
-+    aui_text(AF_SMALL, x + 16, y + 10, t->accent, title, w - 32, 0);
++    q_title(x, y, w, title);
 +    aui_text(AF_SMALLR, x + 16, y + 30, sub, line, w - 32, 0);
 +    for (int r = 0; r < n; r++)
-+        aui_text(AF_MED, x + 20, y + 56 + r * rh + 8, r == row ? 0xffffff : fg,
++        aui_text(AF_MED, x + 20, y + 56 + r * rh + 8, r == row ? q_seltext() : fg,
 +                 items[r], w - 40, 0);
 +    aui_text(AF_SMALLR, AUI_W / 2, y + h - 18, sub, "centre picks  -  menu closes", w - 20, 1);
 +    aui_update();
@@ -5873,7 +6543,7 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..025dcc9d28
+index 0000000000..bd743e227a
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
 @@ -0,0 +1,589 @@
@@ -5901,7 +6571,6 @@ index 0000000000..025dcc9d28
 +#include "asher_check.h"
 +#include "asher_model.h"
 +
-+#define ASHER_OS_VERSION "2.6.2"
 +#if defined(IPOD_VIDEO) && defined(ASHER_VIDEO_GEN) && ASHER_VIDEO_GEN == 55
 +#define MODEL_LABEL "iPod Video (5.5 gen)"
 +#elif defined(IPOD_VIDEO)
@@ -5958,8 +6627,9 @@ index 0000000000..025dcc9d28
 +    aui_topbar();
 +    /* storage card */
 +    int cy = 134, ch = 94;
-+    aui_round(10, cy, AUI_W - 20, ch, 12, t->light ? 0xffffff : 0x22253f,
-+              t->light ? 0xf4f5f8 : 0x1a1c33);
++    if (aui_style() == STY_MOON) aui_px_box(10, cy, AUI_W - 20, ch, 0x0d0a17, 0x5f5388);
++    else aui_round(10, cy, AUI_W - 20, ch, 12, t->light ? 0xffffff : (t->modern ? 0xffffff : t->panel),
++              t->light ? 0xf4f5f8 : (t->modern ? 0xffffff : t->panel));
 +    if (size)
 +        aui_progress(24, cy + 50, AUI_W - 48, 12, (long)((size - freek) / 1024),
 +                     (long)(size / 1024));
@@ -6486,10 +7156,10 @@ index 0000000000..5349121a88
 +#endif
 diff --git a/apps/asher/asher_stats.c b/apps/asher/asher_stats.c
 new file mode 100644
-index 0000000000..aaf5261e42
+index 0000000000..cf4353d079
 --- /dev/null
 +++ b/apps/asher/asher_stats.c
-@@ -0,0 +1,358 @@
+@@ -0,0 +1,537 @@
 +/* Asher OS Stats screen, laid out as retro desktop windows:
 + * album_art.jpg, wallpaper.gif (live), now_playing.txt and moon.jpeg. */
 +#include <stdio.h>
@@ -6563,23 +7233,110 @@ index 0000000000..aaf5261e42
 +    return p ? p + 1 : id3->path;
 +}
 +
-+/* Modern theme: iOS-style widgets (frosted white tiles) on the wallpaper */
++/* ------------------------------------------------------------------ */
++/* shared bits                                                         */
++/* ------------------------------------------------------------------ */
++static int moon_now(void)
++{
++    struct tm *tm = get_time();
++    return asher_moon_phase(tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
++                            tm->tm_hour, tm->tm_min) & 7;
++}
++static bool charging_now(void)
++{
++#if CONFIG_CHARGING
++    return charger_inserted();
++#else
++    return false;
++#endif
++}
++/* "14h 20m left", "Charging", "Charged" */
++static void batt_left(char *buf, size_t n, bool shortform)
++{
++    int b = battery_level();
++    if (charging_now()) { strlcpy(buf, b >= 100 ? "Charged" : "Charging", n); return; }
++    int mins = battery_time();
++    if (mins <= 0 || b < 0) { strlcpy(buf, "--", n); return; }
++    if (mins >= 60) snprintf(buf, n, shortform ? "%dh %02dm" : "%dh %02dm left", mins / 60, mins % 60);
++    else snprintf(buf, n, shortform ? "%d min" : "%d min left", mins);
++}
++static const char *np_artist(struct mp3entry *id3)
++{
++    return (id3->artist && id3->artist[0]) ? id3->artist : "Unknown Artist";
++}
++
++/* ------------------------------------------------------------------ */
++/* Original / Dark: like the iPod's About screen                       */
++/* ------------------------------------------------------------------ */
++static void draw_about(const struct amedia *m, bool dk)
++{
++    struct mp3entry *id3 = asher_track();
++    bool playing = (audio_status() & AUDIO_STATUS_PLAY) && id3;
++    bool vol = asher_media_show_vol(m);
++    char buf[96], f1[16], t1[16];
++    int bat = battery_level();
++    bool st = storage_str(f1, sizeof(f1), t1, sizeof(t1));
++    unsigned bg = dk ? 0x000000 : 0xffffff, lc = dk ? 0xffffff : 0x000000, vc = dk ? 0xa9adb5 : 0x5d6372;
++    const int RH = 25, Y0 = AUI_BAR + 4;
++    static const char *const lab[8] = { "Battery", "Time Left", "Song", "Capacity", "Available",
++                                        "Moon", "Shuffle", "Version" };
++
++    aui_fill(0, 0, AUI_W, AUI_H, bg);
++    aui_topbar();
++    for (int r = 1; r < 8; r++)
++        aui_fill(10, Y0 + r * RH - 1, AUI_W - 20, 1, dk ? 0x1f2024 : 0xe6e8ec);
++    /* battery: a small iPod battery next to the number */
++    if (bat >= 0)
++    {
++        int x = AUI_W - 40, y = Y0 + (RH - 12) / 2;
++        aui_round(x, y, 24, 12, 2, dk ? 0xc9ccd3 : 0x50555e, dk ? 0xc9ccd3 : 0x50555e);
++        aui_fill(x + 1, y + 1, 22, 10, bg);
++        aui_fill(x + 24, y + 3, 2, 6, dk ? 0xc9ccd3 : 0x50555e);
++        int f = (bat * 20 + 50) / 100;
++        if (f > 0) aui_fill(x + 2, y + 2, f, 8, aui_batt_rgb(bat));
++    }
++    /* song progress under the song's name */
++    if (playing || vol)
++    {
++        long p = vol ? aui_volume_pct() : (m->seeking ? m->seek_pos : (long)id3->elapsed);
++        long q = vol ? 100 : (id3->length ? (long)id3->length : 1);
++        int w = 90, x = AUI_W - 10 - w, y = Y0 + 2 * RH + RH - 6;
++        aui_fill(x, y, w, 3, dk ? 0x2b2d32 : 0xdfe2e7);
++        aui_fill(x, y, (int)((long long)w * MIN(p, q) / q), 3, dk ? 0x6ab4ff : 0x1a62c8);
++    }
++    aui_present();
++
++    for (int r = 0; r < 8; r++)
++        aui_text(AF_MED, 12, Y0 + r * RH + (RH - aui_font_h(AF_MED)) / 2, lc, lab[r], 120, 0);
++    int ry = Y0 + (RH - aui_font_h(AF_SMALLR)) / 2;
++    if (bat >= 0) { snprintf(buf, sizeof(buf), "%d%%", bat); aui_text(AF_SMALLR, AUI_W - 46, ry, vc, buf, 60, 2); }
++    batt_left(buf, sizeof(buf), true);
++    aui_text(AF_SMALLR, AUI_W - 12, ry + RH, vc, buf, 150, 2);
++    if (vol) snprintf(buf, sizeof(buf), "Volume %d%%", aui_volume_pct());
++    else if (playing) snprintf(buf, sizeof(buf), "%s", track_title(id3));
++    else strlcpy(buf, "Not playing", sizeof(buf));
++    aui_text(AF_SMALLR, AUI_W - 12, ry + 2 * RH - 4, vc, buf, 180, 2);
++    if (st) snprintf(buf, sizeof(buf), "%s GB", t1);
++    aui_text(AF_SMALLR, AUI_W - 12, ry + 3 * RH, vc, st ? buf : "--", 150, 2);
++    if (st) { strlcat(f1, " GB", sizeof(f1)); }
++    aui_text(AF_SMALLR, AUI_W - 12, ry + 4 * RH, vc, st ? f1 : "--", 150, 2);
++    int ph = moon_now();
++    snprintf(buf, sizeof(buf), "%s %s", moon_l1[ph], moon_l2[ph]);
++    aui_text(AF_SMALLR, AUI_W - 12, ry + 5 * RH, vc, buf, 150, 2);
++    aui_text(AF_SMALLR, AUI_W - 12, ry + 6 * RH, global_settings.playlist_shuffle ? (dk ? 0x6ab4ff : 0x1a62c8) : vc,
++             global_settings.playlist_shuffle ? "On" : "Off", 150, 2);
++    aui_text(AF_SMALLR, AUI_W - 12, ry + 7 * RH, vc, "Asher OS " ASHER_OS_VERSION, 150, 2);
++    aui_topbar_text("About");
++    aui_update();
++}
++
++/* ------------------------------------------------------------------ */
++/* Modern 2026: widgets                                                */
++/* ------------------------------------------------------------------ */
 +static void wtile(int x, int y, int w, int h)
 +{
-+    aui_shade(x, y, w, h, 16, 40, 0xffffff);      /* mostly white, a hint of what's behind */
++    aui_shade(x, y, w, h, 18, 34, 0xffffff);
 +}
-+
-+/* the wallpaper, shrunk into a small box (nearest pixel) */
-+static void thumb(const fb_data *src, int sw, int sh, int x, int y, int w, int h)
-+{
-+    for (int j = 0; j < h; j++)
-+    {
-+        const fb_data *row = src + (j * sh / h) * sw;
-+        for (int i = 0; i < w; i++)
-+            aui_fb[(y + j) * AUI_W + x + i] = row[i * sw / w];
-+    }
-+}
-+
 +static void draw_modern(const struct amedia *m)
 +{
 +    struct mp3entry *id3 = asher_track();
@@ -6588,111 +7345,203 @@ index 0000000000..aaf5261e42
 +    bool paused = st & AUDIO_STATUS_PAUSE;
 +    bool vol = asher_media_show_vol(m);
 +    long pos = playing ? (m->seeking ? m->seek_pos : (long)id3->elapsed) : 0;
-+    char buf[64], b2[16];
-+    struct tm *tm = get_time();
-+    int ph = asher_moon_phase(tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
-+                              tm->tm_hour, tm->tm_min);
++    char buf[64];
++    int ph = moon_now();
 +    int bat = battery_level();
-+    const unsigned tc = 0x1c1c1e, sc = 0x6e6e78;
++    const unsigned tc = 0x1c1c1e, sc = 0x6e6e73;
 +
 +    asher_wp_prepare();
 +    const fb_data *f = asher_wp_full();
-+    if (f) { memcpy(aui_fb, f, sizeof(fb_data) * AUI_W * AUI_H); aui_shade(0, 0, AUI_W, AUI_H, 0, 200, 0x000000); }
++    if (f) { memcpy(aui_fb, f, sizeof(fb_data) * AUI_W * AUI_H); aui_shade(0, 0, AUI_W, AUI_H, 0, 170, 0x000000); }
 +    else if (!aui_sprite_fill(SPR_M_NPBG)) aui_vgrad(0, 0, AUI_W, AUI_H, 0xb48cff, 0x6aa0ff);
++    aui_bar_dark = true;
 +    aui_topbar();
 +
-+    /* now playing widget */
-+    int ny = AUI_BAR + 6, nh = 94;
-+    wtile(8, ny, AUI_W - 16, nh);
-+    int ax = 18, ay = ny + 10, as = 74;
++    const int G = 8, TY = AUI_BAR + 4, TH = 102, BY = TY + TH + G, BH = AUI_H - BY - 6;
++    const int LW = 134, RX = G + LW + G, RW = AUI_W - RX - G;
++    /* battery ring (big tile, left) */
++    wtile(G, TY, LW, TH);
++    int rcx = G + 50, rcy = TY + TH / 2;
++    aui_aa_arc(rcx, rcy, 36, 28, 3600, 0xe5e5ea);
++    if (bat > 0) aui_aa_arc(rcx, rcy, 36, 28, bat * 36, charging_now() ? 0x30d158 : aui_batt_rgb(bat));
++    if (charging_now()) aui_bolt(aui_fill, rcx - 4, rcy + 10);
++    /* now playing (big tile, right) */
++    wtile(RX, TY, RW, TH);
++    int ax = RX + 10, ay = TY + 10, as = 52;
 +    if (!aui_albumart_scaled(ax, ay, as))
++        aui_round(ax, ay, as, as, 10, 0xff5e6c, 0xfa2346);
++    else
++        aui_corners(ax, ay, as, as, 8, NULL, 0xffffff);
 +    {
-+        aui_round(ax, ay, as, as, 12, 0xff5e6c, 0xfa2346);
-+        aui_sprite_c(SPR_NOTE, ax + as / 2, ay + as / 2);
++        long p = vol ? aui_volume_pct() : pos, q = vol ? 100 : (playing && id3->length ? (long)id3->length : 1);
++        int px0 = RX + 10, pw = RW - 20, py = TY + TH - 16;
++        aui_round(px0, py, pw, 4, 2, 0xd1d1d6, 0xd1d1d6);
++        int fill = (int)((long long)pw * MIN(p, q) / q);
++        if (fill > 0) aui_round(px0, py, MAX(4, fill), 4, 2, vol ? 0x0a84ff : 0xfa2346, vol ? 0x0a84ff : 0xfa2346);
 +    }
-+    int px0 = 104, pw = AUI_W - px0 - 20;
-+    long p = vol ? aui_volume_pct() : pos, q = vol ? 100 : (playing && id3->length ? (long)id3->length : 1);
-+    int fill = (int)((long long)pw * MIN(p, q) / q);
-+    aui_round(px0, ay + 62, pw, 5, 2, 0xc7c7cc, 0xc7c7cc);
-+    if (fill > 0) aui_round(px0, ay + 62, MAX(5, fill), 5, 2, 0xed1c24, 0xed1c24);
-+
-+    /* four small widgets */
-+    int wy = ny + nh + 6, wh = AUI_H - wy - 6, ww = (AUI_W - 16 - 3 * 6) / 4;
-+    int wx[4];
-+    for (int k = 0; k < 4; k++) { wx[k] = 8 + k * (ww + 6); wtile(wx[k], wy, ww, wh); }
-+    /* battery bar */
-+    if (bat >= 0)
-+    {
-+        unsigned c = aui_batt_rgb(bat);
-+        aui_round(wx[0] + 8, wy + wh - 20, ww - 16, 9, 4, 0xe5e5ea, 0xe5e5ea);
-+        aui_round(wx[0] + 8, wy + wh - 20, MAX(9, (ww - 16) * bat / 100), 9, 4, c, c);
-+    }
-+    /* moon */
-+    aui_sprite_c(SPR_MOON0 + ph, wx[1] + ww / 2, wy + 44);
-+    /* storage bar */
++    /* three small tiles: storage, moon, clock */
++    int sw3 = (AUI_W - 4 * G) / 3, sx[3];
++    for (int k = 0; k < 3; k++) { sx[k] = G + k * (sw3 + G); wtile(sx[k], BY, sw3, BH); }
 +    int used = storage_pct_used();
-+    if (used >= 0)
-+    {
-+        aui_round(wx[2] + 8, wy + wh - 20, ww - 16, 9, 4, 0xe5e5ea, 0xe5e5ea);
-+        aui_round(wx[2] + 8, wy + wh - 20, MAX(9, (ww - 16) * used / 100), 9, 4, 0x007aff, 0x007aff);
-+    }
-+    /* wallpaper thumbnail */
-+    const fb_data *sm = asher_wp_small_still();
-+    int tw = ww - 12, th = tw * 3 / 4;
-+    if (sm) thumb(sm, ASHER_BOX_W, ASHER_BOX_H, wx[3] + 6, wy + 22, tw, th);
-+    else aui_round(wx[3] + 6, wy + 22, tw, th, 6, 0xd1d1d6, 0xd1d1d6);
++    int scx = sx[0] + 26, scy = BY + BH / 2 + 6;
++    aui_aa_arc(scx, scy, 18, 13, 3600, 0xe5e5ea);
++    if (used > 0) aui_aa_arc(scx, scy, 18, 13, used * 36, 0x0a84ff);
++    aui_sprite_c(SPR_MOON0 + ph, sx[1] + sw3 / 2, BY + 48);
 +    aui_present();
 +
++    /* battery text */
++    snprintf(buf, sizeof(buf), bat >= 0 ? "%d%%" : "--", bat);
++    aui_text(AF_MED, rcx, rcy - aui_font_h(AF_MED) / 2 - (charging_now() ? 4 : 0), tc, buf, 60, 1);
++    aui_text(AF_SMALL, G + 92, TY + 12, sc, "Battery", 50, 0);
++    batt_left(buf, sizeof(buf), true);
++    aui_text(AF_SMALL, G + 92, TY + 30, tc, buf, 46, 0);
++    if (!charging_now() && battery_time() > 0) aui_text(AF_SMALLR, G + 92, TY + 46, sc, "left", 46, 0);
 +    /* now playing text */
-+    aui_text(AF_SMALL, px0, ay, paused ? 0xff9500 : 0xed1c24,
-+             !playing ? "NOT PLAYING" : paused ? "PAUSED" : "NOW PLAYING", pw, 0);
++    int tx = ax + as + 8, tw = RX + RW - 10 - tx;
++    aui_text(AF_SMALL, tx, ay, paused ? 0xff9500 : 0xfa2346,
++             !playing ? "NOT PLAYING" : paused ? "PAUSED" : "PLAYING", tw, 0);
 +    if (playing)
 +    {
-+        aui_text(AF_BIG, px0, ay + 15, tc, track_title(id3), pw, 0);
-+        aui_text(AF_SMALLR, px0, ay + 38, sc,
-+                 (id3->artist && id3->artist[0]) ? id3->artist : "Unknown Artist", pw, 0);
-+        if (vol) snprintf(buf, sizeof(buf), "Volume %d%%", aui_volume_pct());
-+        else
-+        {
-+            aui_fmt_time(buf, sizeof(buf), pos);
-+            aui_fmt_time(b2, sizeof(b2), id3->length);
-+            strlcat(buf, " / ", sizeof(buf)); strlcat(buf, b2, sizeof(buf));
-+        }
-+        aui_text(AF_SMALLR, px0, ay + 70, sc, buf, 120, 0);
-+        aui_text(AF_SMALLR, AUI_W - 20, ay + 70, global_settings.playlist_shuffle ? 0x007aff : sc,
-+                 global_settings.playlist_shuffle ? "Shuffle On" : "Shuffle Off", 90, 2);
++        aui_text(AF_SMALL, tx, ay + 16, tc, track_title(id3), tw, 0);
++        aui_text(AF_SMALLR, tx, ay + 32, sc, np_artist(id3), tw, 0);
 +    }
 +    else
-+        aui_text(AF_MED, px0, ay + 20, tc, "Pick something in Music", pw, 0);
-+
-+    /* widget labels */
-+    static const char *lbl[4] = { "BATTERY", "MOON", "STORAGE", "WALLPAPER" };
-+    for (int k = 0; k < 4; k++)
-+        aui_text(AF_SMALLR, wx[k] + ww / 2, wy + 6, sc, lbl[k], ww - 4, 1);
-+    snprintf(buf, sizeof(buf), bat >= 0 ? "%d%%" : "--", bat);
-+    aui_text(AF_BIG, wx[0] + ww / 2, wy + 30, tc, buf, ww - 4, 1);
-+    snprintf(buf, sizeof(buf), "%s", moon_l1[ph]);
-+    aui_text(AF_SMALLR, wx[1] + ww / 2, wy + wh - 30, tc, buf, ww - 4, 1);
-+    aui_text(AF_SMALLR, wx[1] + ww / 2, wy + wh - 17, tc, moon_l2[ph], ww - 4, 1);
++        aui_text(AF_SMALLR, tx, ay + 18, sc, "Pick something in Music", tw, 0);
++    if (vol) snprintf(buf, sizeof(buf), "Volume %d%%", aui_volume_pct());
++    else snprintf(buf, sizeof(buf), "Shuffle %s", global_settings.playlist_shuffle ? "On" : "Off");
++    aui_text(AF_SMALLR, RX + 10, TY + TH - 34, global_settings.playlist_shuffle || vol ? 0x0a84ff : sc, buf, RW - 20, 0);
++    /* small tile text */
++    aui_text(AF_SMALL, sx[0] + 10, BY + 8, sc, "Storage", sw3 - 12, 0);
 +    {
 +        char f1[16], t1[16];
 +        if (storage_str(f1, sizeof(f1), t1, sizeof(t1)))
 +        {
-+            snprintf(buf, sizeof(buf), "%s GB", f1);
-+            aui_text(AF_SMALL, wx[2] + ww / 2, wy + 26, tc, buf, ww - 4, 1);
-+            snprintf(buf, sizeof(buf), "free of %s", t1);
-+            aui_text(AF_SMALLR, wx[2] + ww / 2, wy + 42, sc, buf, ww - 4, 1);
++            aui_text(AF_SMALL, sx[0] + 50, scy - 14, tc, f1, sw3 - 52, 0);
++            aui_text(AF_SMALLR, sx[0] + 50, scy + 1, sc, "GB free", sw3 - 52, 0);
 +        }
 +    }
-+    const char *wn = asher_wallpaper_name();
-+    aui_text(AF_SMALLR, wx[3] + ww / 2, wy + wh - 17, tc, wn ? wn : "None", ww - 4, 1);
++    aui_text(AF_SMALL, sx[1] + 10, BY + 8, sc, "Moon", sw3 - 12, 0);
++    snprintf(buf, sizeof(buf), "%s %s", moon_l1[ph], ph == 0 || ph == 4 ? "" : moon_l2[ph]);
++    aui_text(AF_SMALLR, sx[1] + sw3 / 2, BY + BH - 18, tc, buf, sw3 - 6, 1);
++    {
++        struct tm *tm = get_time();
++        static const char *dn[7] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
++        static const char *mn[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
++        aui_text(AF_SMALL, sx[2] + 10, BY + 8, 0xfa2346, dn[tm->tm_wday % 7], sw3 - 12, 0);
++        snprintf(buf, sizeof(buf), "%d", tm->tm_mday);
++        aui_text(AF_TITLE, sx[2] + 10, BY + 24, tc, buf, sw3 - 12, 0);
++        aui_text(AF_SMALLR, sx[2] + 10, BY + BH - 18, sc, mn[tm->tm_mon % 12], sw3 - 12, 0);
++    }
 +    aui_topbar_text("Info");
++    aui_bar_dark = false;
++    aui_update();
++}
++
++/* ------------------------------------------------------------------ */
++/* MoonPod: the night's dashboard                                      */
++/* ------------------------------------------------------------------ */
++static void chunky_moon(int cx, int cy, int r, int ph)
++{
++    /* drawn at half size and doubled, with today's shadow */
++    static const int cosv[8] = { 100, 71, 0, -71, -100, -71, 0, 71 };
++    int c = cosv[ph & 7];
++    for (int j = -r; j < r; j++)
++    {
++        int yy = 2 * j + 1, w = 0;
++        while ((w + 1) * (w + 1) + yy * yy <= 4 * r * r) w++;
++        for (int i = -r; i < r; i++)
++        {
++            int xx = 2 * i + 1;
++            if (xx * xx + yy * yy > 4 * r * r) continue;
++            bool on = (ph <= 4) ? (xx * 100 > w * c) : (xx * 100 < -w * c);
++            bool rim = xx * xx + yy * yy > 4 * (r - 1) * (r - 1);
++            unsigned col = on ? (rim ? 0xb3a99a : 0xe9e3d3) : (rim ? 0x3a2f5c : 0x241c38);
++            aui_fill(cx + 2 * i, cy + 2 * j, 2, 2, col);
++        }
++    }
++    static const signed char cr[][2] = { { -6, -5 }, { 3, 3 }, { -3, 7 }, { 6, -8 }, { -9, 3 } };
++    for (unsigned k = 0; k < sizeof(cr) / 2; k++)
++    {
++        int i = cr[k][0], j = cr[k][1], xx = 2 * i + 1, yy = 2 * j + 1, w = 0;
++        while ((w + 1) * (w + 1) + yy * yy <= 4 * r * r) w++;
++        bool on = (ph <= 4) ? (xx * 100 > w * c) : (xx * 100 < -w * c);
++        aui_fill(cx + 2 * i, cy + 2 * j, 4, 4, on ? 0xc4b9a6 : 0x1b1530);
++    }
++}
++static void cells(int x, int y, int n, int cw, int h, int on, unsigned c)
++{
++    for (int i = 0; i < n; i++) aui_fill(x + i * cw, y, cw - 2, h, i < on ? c : 0x2c2440);
++}
++static void draw_moon(const struct amedia *m)
++{
++    struct mp3entry *id3 = asher_track();
++    int st = audio_status();
++    bool playing = (st & AUDIO_STATUS_PLAY) && id3;
++    bool paused = st & AUDIO_STATUS_PAUSE;
++    bool vol = asher_media_show_vol(m);
++    long pos = playing ? (m->seeking ? m->seek_pos : (long)id3->elapsed) : 0;
++    char buf[96];
++    int ph = moon_now(), bat = battery_level(), used = storage_pct_used();
++    const unsigned bone = 0xe9e3d3, lav = 0xb9a7ff, dim = 0x8d84a8, yel = 0xffe9a8;
++
++    aui_night_sky(0, AUI_H);
++    aui_topbar();
++    /* tonight's moon */
++    aui_px_box(6, AUI_BAR + 6, 106, 128, 0x0d0a17, 0x5f5388);
++    chunky_moon(59, AUI_BAR + 52, 17, ph);
++    /* status */
++    int sx = 118, sy = AUI_BAR + 6, sw = AUI_W - sx - 6, sh = 128;
++    aui_px_box(sx, sy, sw, sh, 0x0d0a17, 0x5f5388);
++    int bc = bat < 0 ? 0 : (bat * 10 + 9) / 10;
++    cells(sx + 10, sy + 30, 10, 13, 8, bc, bat < 0 ? 0x2c2440 : aui_batt_rgb(bat));
++    cells(sx + 10, sy + 92, 10, 13, 8, used < 0 ? 0 : (used * 10 + 9) / 10, lav);
++    /* now playing */
++    int ny = sy + sh + 6, nh = AUI_H - ny - 4;
++    aui_px_box(6, ny, AUI_W - 12, nh, 0x0d0a17, playing && !paused ? lav : 0x5f5388);
++    {
++        long p = vol ? aui_volume_pct() : pos, q = vol ? 100 : (playing && id3->length ? (long)id3->length : 1);
++        int n = 28, on = (int)((long long)n * MIN(p, q) / q);
++        cells(16, ny + nh - 14, n, 10, 6, on, vol ? yel : lav);
++    }
++    aui_present();
++
++    aui_text(AF_MED, 59, AUI_BAR + 92, bone, moon_l1[ph], 100, 1);
++    aui_text(AF_MED, 59, AUI_BAR + 110, lav, moon_l2[ph], 100, 1);
++    aui_text(AF_SMALLR, sx + 10, sy + 8, dim, "BATTERY", 80, 0);
++    snprintf(buf, sizeof(buf), bat >= 0 ? "%d%%" : "--", bat);
++    aui_text(AF_MED, sx + sw - 10, sy + 6, bone, buf, 60, 2);
++    batt_left(buf, sizeof(buf), false);
++    aui_text(AF_SMALLR, sx + 10, sy + 42, yel, buf, sw - 20, 0);
++    aui_text(AF_SMALLR, sx + 10, sy + 70, dim, "STORAGE", 80, 0);
++    {
++        char f1[16], t1[16];
++        if (storage_str(f1, sizeof(f1), t1, sizeof(t1)))
++        {
++            snprintf(buf, sizeof(buf), "%s GB free", f1);
++            aui_text(AF_SMALLR, sx + sw - 10, sy + 70, bone, buf, 110, 2);
++            snprintf(buf, sizeof(buf), "of %s GB", t1);
++            aui_text(AF_SMALLR, sx + 10, sy + 104, dim, buf, sw - 20, 0);
++        }
++    }
++    aui_text(AF_SMALLR, 16, ny + 4, playing && !paused ? yel : dim,
++             vol ? "VOLUME" : !playing ? "NOTHING PLAYING" : paused ? "PAUSED" : "NOW PLAYING", 140, 0);
++    aui_text(AF_SMALLR, AUI_W - 16, ny + 4, global_settings.playlist_shuffle ? yel : dim,
++             global_settings.playlist_shuffle ? "shuffle on" : "shuffle off", 120, 2);
++    if (playing)
++    {
++        snprintf(buf, sizeof(buf), "%s - %s", track_title(id3), np_artist(id3));
++        aui_text(AF_MED, 16, ny + 20, bone, buf, AUI_W - 32, 0);
++    }
++    aui_topbar_text("Stats");
 +    aui_update();
 +}
 +
 +static void draw(const struct amedia *m)
 +{
-+    if (aui_theme()->modern) { draw_modern(m); return; }
++    int sty = aui_style();
++    if (sty == STY_MODERN) { draw_modern(m); return; }
++    if (sty == STY_ORIG || sty == STY_DARK) { draw_about(m, sty == STY_DARK); return; }
++    if (sty == STY_MOON) { draw_moon(m); return; }
 +    struct mp3entry *id3 = asher_track();
 +    int st = audio_status();
 +    bool playing = (st & AUDIO_STATUS_PLAY) && id3;
@@ -6860,10 +7709,10 @@ index 0000000000..101fc74b20
 +#endif
 diff --git a/apps/asher/asher_theme.c b/apps/asher/asher_theme.c
 new file mode 100644
-index 0000000000..7dc86dec0d
+index 0000000000..079da6f058
 --- /dev/null
 +++ b/apps/asher/asher_theme.c
-@@ -0,0 +1,427 @@
+@@ -0,0 +1,428 @@
 +#include <stdio.h>
 +#include <string.h>
 +#include <fcntl.h>
@@ -6898,7 +7747,7 @@ index 0000000000..7dc86dec0d
 +int asher_layout = 0;
 +
 +static const char *theme_file[NUM_THEMES] = { "bubbles", "classic", "dark", "modern", "moonpod" };
-+static const char *theme_name[NUM_THEMES] = { "Retro", "Classic", "Dark", "Modern", "MoonPod" };
++static const char *theme_name[NUM_THEMES] = { "Retro", "Original", "Dark", "Modern", "MoonPod" };
 +
 +/* which themes may use a wallpaper: 1 << theme number */
 +#define WT_ALL    0x1f                     /* "Off" */
@@ -6985,6 +7834,7 @@ index 0000000000..7dc86dec0d
 +    char path[MAX_PATH];
 +    cur_theme = i;
 +    asher_layout = i;
++    aui_style_changed();
 +    snprintf(path, sizeof(path), ASHER_THEME_DIR "%s.cfg", theme_file[i]);
 +    if (!settings_load_config(path, true) && i == 3)
 +    {
@@ -7286,7 +8136,7 @@ index 0000000000..7dc86dec0d
 +#define THI(n, label) \
 +    ASHER_CHOICE(thi##n, label, pick_theme, n, theme_get, n)
 +THI(0, "Retro");
-+THI(1, "Classic");
++THI(1, "Original");
 +THI(2, "Dark");
 +THI(3, "Modern");
 +THI(4, "MoonPod");
@@ -7308,10 +8158,10 @@ index 0000000000..728fa524c6
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..097749146d
+index 0000000000..d8f8da09f5
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,1099 @@
+@@ -0,0 +1,1587 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -7343,6 +8193,8 @@ index 0000000000..097749146d
 +#include "asher_boot.h"
 +#include "asher_theme.h"
 +#include "asher_wallpaper.h"
++#include "moonphase.h"
++#include "asher_prefs.h"
 +#include "thread.h"
 +/* 2.6.1 loading keeper (see below) */
 +static volatile bool ldr_live, ldr_in_draw;
@@ -7411,7 +8263,156 @@ index 0000000000..097749146d
 +    int bl = (a & 255) + ((((int)(b & 255) - (int)(a & 255)) * t) / n);
 +    return (unsigned)((r << 16) | (g << 8) | bl);
 +}
-+static int isqrt_i(int v) { int r = 0; while ((r + 1) * (r + 1) <= v) r++; return r; }
++static int isqrt_i(int v)
++{
++    /* bit-by-bit integer square root (fast for big numbers too) */
++    unsigned r = 0, b = 1u << 30, n = v < 0 ? 0 : (unsigned)v;
++    while (b > n) b >>= 2;
++    while (b)
++    {
++        if (n >= r + b) { n -= r + b; r = (r >> 1) + b; }
++        else r >>= 1;
++        b >>= 2;
++    }
++    return (int)r;
++}
++
++/* ---- smooth (anti-aliased) shapes, 2.7 ---- */
++void aui_aa_px(int x, int y, int cov, unsigned rgb)
++{
++    if (cov <= 0 || x < 0 || y < 0 || x >= AUI_W || y >= AUI_H) return;
++    fb_data *p = &aui_fb[y * AUI_W + x];
++    *p = cov >= 256 ? px(rgb) : blend(*p, px(rgb), cov);
++}
++
++/* angle of (dx, dy) clockwise from straight up, 0..3599 (tenths of a degree) */
++static int ang10(int dx, int dy)
++{
++    int ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
++    if (!ax && !ay) return 0;
++    /* atan(min/max) in tenths of a degree, a good small approximation */
++    int mn = ax < ay ? ax : ay, mx = ax < ay ? ay : ax;
++    long z = (long)mn * 1024 / mx;                         /* 0..1024 */
++    long a = (z * 450 + (z * (1024 - z) / 1024) * 156) / 1024;   /* ~0..450 */
++    if (ay > ax) a = 900 - a;                              /* angle from the x axis */
++    /* a = angle from +x towards +y (0..900) for the first quadrant */
++    int deg;
++    if (dx >= 0 && dy < 0)       deg = 900 - (int)a;      /* up-right */
++    else if (dx >= 0)            deg = 900 + (int)a;      /* down-right */
++    else if (dy >= 0)            deg = 2700 - (int)a;     /* down-left */
++    else                         deg = 2700 + (int)a;     /* up-left */
++    return (deg % 3600 + 3600) % 3600;
++}
++
++/* a ring (ro..ri) or disc (ri = 0) centred on the pixel corner (cx, cy);
++ * only the part from 12 o'clock clockwise to 'upto' tenths of a degree
++ * (3600 = all of it) */
++void aui_aa_arc(int cx, int cy, int ro, int ri, int upto, unsigned rgb)
++{
++    long ro2 = (long)ro * 8 * ro * 8, ri2 = (long)ri * 8 * ri * 8;
++    for (int y = cy - ro - 1; y <= cy + ro; y++)
++        for (int x = cx - ro - 1; x <= cx + ro; x++)
++        {
++            int cov = 0;
++            for (int j = 0; j < 4; j++)
++                for (int i = 0; i < 4; i++)
++                {
++                    int sx = 8 * (x - cx) + 2 * i + 1, sy = 8 * (y - cy) + 2 * j + 1;
++                    long d = (long)sx * sx + (long)sy * sy;
++                    if (d > ro2 || d < ri2) continue;
++                    if (upto < 3600 && ang10(sx, sy) >= upto) continue;
++                    cov++;
++                }
++            if (cov) aui_aa_px(x, y, cov * 16, rgb);
++        }
++}
++
++/* a filled triangle, corners in 1/16 pixel */
++void aui_aa_tri(int x0, int y0, int x1, int y1, int x2, int y2, unsigned rgb)
++{
++    int minx = MIN(x0, MIN(x1, x2)) / 16 - 1, maxx = MAX(x0, MAX(x1, x2)) / 16 + 1;
++    int miny = MIN(y0, MIN(y1, y2)) / 16 - 1, maxy = MAX(y0, MAX(y1, y2)) / 16 + 1;
++    long area = (long)(x1 - x0) * (y2 - y0) - (long)(y1 - y0) * (x2 - x0);
++    int sgn = area < 0 ? -1 : 1;
++    for (int y = miny; y <= maxy; y++)
++        for (int x = minx; x <= maxx; x++)
++        {
++            int cov = 0;
++            for (int j = 0; j < 4; j++)
++                for (int i = 0; i < 4; i++)
++                {
++                    long px16 = x * 16 + 2 + 4 * i, py16 = y * 16 + 2 + 4 * j;
++                    long e0 = ((long)(x1 - x0) * (py16 - y0) - (long)(y1 - y0) * (px16 - x0)) * sgn;
++                    long e1 = ((long)(x2 - x1) * (py16 - y1) - (long)(y2 - y1) * (px16 - x1)) * sgn;
++                    long e2 = ((long)(x0 - x2) * (py16 - y2) - (long)(y0 - y2) * (px16 - x2)) * sgn;
++                    if (e0 >= 0 && e1 >= 0 && e2 >= 0) cov++;
++                }
++            if (cov) aui_aa_px(x, y, cov * 16, rgb);
++        }
++}
++
++/* a mirror image of the rows just above y + h, fading out (Cover Flow) */
++void aui_reflect(int x, int y, int w, int h, int rh, int strength)
++{
++    for (int j = 0; j < rh; j++)
++    {
++        int sy = y + h - 1 - j, dy = y + h + 1 + j;
++        if (sy < 0 || dy >= AUI_H) break;
++        int a = strength * (rh - j) / rh;
++        for (int i = 0; i < w; i++)
++        {
++            int xx = x + i;
++            if (xx < 0 || xx >= AUI_W) continue;
++            fb_data *d = &aui_fb[dy * AUI_W + xx];
++            *d = blend(*d, aui_fb[sy * AUI_W + xx], a);
++        }
++    }
++}
++
++/* round off a picture's corners, putting back what was behind it
++ * ('under' is a whole-screen picture, or NULL to use a flat colour) */
++void aui_corners(int x, int y, int w, int h, int r, const fb_data *under, unsigned rgb)
++{
++    for (int j = 0; j < r; j++)
++        for (int i = 0; i < r; i++)
++        {
++            int dx = r - i, dy = r - j;           /* distance from the corner's centre */
++            int d2 = (2 * dx - 1) * (2 * dx - 1) + (2 * dy - 1) * (2 * dy - 1);
++            int R2 = 4 * r * r;
++            if (d2 <= R2 - 4 * r) continue;           /* well inside */
++            int cov = d2 >= R2 + 4 * r ? 256 : 128;    /* outside, or right on the edge */
++            const int cx[4] = { x + i, x + w - 1 - i, x + i, x + w - 1 - i };
++            const int cy[4] = { y + j, y + j, y + h - 1 - j, y + h - 1 - j };
++            for (int k = 0; k < 4; k++)
++            {
++                if (cx[k] < 0 || cy[k] < 0 || cx[k] >= AUI_W || cy[k] >= AUI_H) continue;
++                fb_data *d = &aui_fb[cy[k] * AUI_W + cx[k]];
++                fb_data u = under ? under[cy[k] * AUI_W + cx[k]] : px(rgb);
++                *d = cov >= 256 ? u : blend(*d, u, cov);
++            }
++        }
++}
++
++/* a thick line with round ends; coordinates in 1/16 pixel */
++void aui_aa_line16(int x0, int y0, int x1, int y1, int w16, unsigned rgb)
++{
++    int minx = (MIN(x0, x1) - w16) / 16 - 1, maxx = (MAX(x0, x1) + w16) / 16 + 1;
++    int miny = (MIN(y0, y1) - w16) / 16 - 1, maxy = (MAX(y0, y1) + w16) / 16 + 1;
++    long vx = x1 - x0, vy = y1 - y0, vv = vx * vx + vy * vy;
++    for (int y = miny; y <= maxy; y++)
++        for (int x = minx; x <= maxx; x++)
++        {
++            long px16 = x * 16 + 8 - x0, py16 = y * 16 + 8 - y0;
++            long t = vv ? (px16 * vx + py16 * vy) * 1024 / vv : 0;
++            if (t < 0) t = 0;
++            if (t > 1024) t = 1024;
++            long ex = px16 - vx * t / 1024, ey = py16 - vy * t / 1024;
++            int d = isqrt_i((int)(ex * ex + ey * ey));       /* 1/16 px */
++            int cov = (w16 / 2 + 8 - d) * 16;                /* 1 px soft edge */
++            if (cov > 256) cov = 256;
++            if (cov > 0) aui_aa_px(x, y, cov, rgb);
++        }
++}
 +
 +/* inset of a rounded corner on row dy (0 = top row) */
 +static int corner_inset(int dy, int h, int r)
@@ -7545,6 +8546,8 @@ index 0000000000..097749146d
 +    "m_npbg",
 +    "p_music", "p_settings", "p_stats", "p_play",
 +    "p_music_s", "p_settings_s", "p_stats_s", "p_play_s",
++    "md_music", "md_settings", "md_stats", "md_play",
++    "md_music_s", "md_settings_s", "md_stats_s", "md_play_s",
 +};
 +struct spr { int w, h; unsigned char *rgb; unsigned char *a; };
 +static struct spr sprs[SPR_COUNT];
@@ -7625,13 +8628,79 @@ index 0000000000..097749146d
 +/* ------------------------------------------------------------------ */
 +/* fonts                                                               */
 +/* ------------------------------------------------------------------ */
-+static const char *font_file[AF_COUNT] = {
-+    "18-Adobe-Helvetica-Bold", "14-Adobe-Helvetica-Bold",
-+    "12-Adobe-Helvetica-Bold", "12-Adobe-Helvetica",
-+    "20-Asher-Retro", "10-Asher-Retro",
-+};
-+static int fonts[AF_COUNT] = { -1, -1, -1, -1, -1, -1 };
 +static bool inited;
++/* 2.7: every look has its own lettering */
++static const char *font_file[STY_COUNT][AF_COUNT] = {
++    /* Retro */
++    { "19-Nunito-ExtraBold", "15-Nunito-ExtraBold", "13-Nunito-Bold",
++      "13-Nunito-SemiBold", "20-Asher-Retro", "10-Asher-Retro", "19-Nunito-ExtraBold" },
++    /* Original: the iPod's own Helvetica-style lettering */
++    { "18-Adobe-Helvetica-Bold", "14-Adobe-Helvetica-Bold", "12-Adobe-Helvetica-Bold",
++      "12-Adobe-Helvetica", "20-Asher-Retro", "10-Asher-Retro", "21-Adobe-Helvetica-Bold" },
++    /* Dark */
++    { "18-Adobe-Helvetica-Bold", "14-Adobe-Helvetica-Bold", "12-Adobe-Helvetica-Bold",
++      "12-Adobe-Helvetica", "20-Asher-Retro", "10-Asher-Retro", "21-Adobe-Helvetica-Bold" },
++    /* Modern: Inter, smooth-edged, like a 2026 phone */
++    { "20-Inter-SemiBold", "15-Inter-SemiBold", "13-Inter-SemiBold",
++      "13-Inter-Regular", "20-Asher-Retro", "10-Asher-Retro", "26-InterDisplay-Bold" },
++    /* MoonPod: pixel lettering */
++    { "24-Jersey10", "20-Jersey10", "16-Jersey10",
++      "16-VT323", "20-Asher-Retro", "10-Asher-Retro", "24-Jersey10" },
++};
++static int fonts[AF_COUNT] = { -1, -1, -1, -1, -1, -1, -1 };
++static const char *font_loaded[AF_COUNT];
++static int fonts_style = -1;
++
++int aui_style(void)
++{
++    extern int asher_layout;
++    int i = asher_layout;
++    return (i < 0 || i >= STY_COUNT) ? STY_RETRO : i;
++}
++
++/* load this look's fonts, keeping any that are the same, and letting go of
++ * the old ones (fonts live in memory so they never touch the drive) */
++static void fonts_for_style(int sty)
++{
++    char path[MAX_PATH];
++    if (sty == fonts_style) return;
++    fonts_style = sty;
++    for (int i = 0; i < AF_COUNT; i++)
++    {
++        const char *want = font_file[sty][i];
++        if (font_loaded[i] && !strcmp(font_loaded[i], want) && fonts[i] >= 0) continue;
++        /* still used by another slot? then don't unload it */
++        int old = fonts[i];
++        fonts[i] = -1;
++        font_loaded[i] = NULL;
++        bool shared = false;
++        for (int k = 0; k < AF_COUNT; k++)
++            if (k != i && fonts[k] == old) shared = true;
++        if (old >= 0 && old != FONT_UI && !shared) font_unload(old);
++        /* reuse a slot that already has this file */
++        for (int k = 0; k < AF_COUNT; k++)
++            if (k != i && font_loaded[k] && !strcmp(font_loaded[k], want) && fonts[k] >= 0)
++                { fonts[i] = fonts[k]; font_loaded[i] = want; break; }
++        if (fonts[i] >= 0) continue;
++        snprintf(path, sizeof(path), FONT_DIR "%s.fnt", want);
++        fonts[i] = font_load(path);
++        if (fonts[i] < 0 && sty != STY_RETRO)          /* a file missing: fall back */
++        {
++            snprintf(path, sizeof(path), FONT_DIR "%s.fnt", font_file[STY_RETRO][i]);
++            fonts[i] = font_load(path);
++        }
++        if (fonts[i] >= 0) font_loaded[i] = want;
++    }
++}
++
++void aui_style_changed(void)
++{
++    if (!inited) return;
++    asher_mem_lend();                  /* fonts load into the reserve */
++    fonts_for_style(aui_style());
++    asher_mem_back();
++    aui_dirty = true;
++}
 +static bool load_anim(int i);
 +static void wp_loading_cb(int pct);
 +
@@ -7644,11 +8713,8 @@ index 0000000000..097749146d
 +    if (inited) return;
 +    inited = true;
 +    f3d_init();                       /* the 3D retro lettering */
-+    for (int i = 0; i < AF_COUNT; i++)
-+    {
-+        snprintf(path, sizeof(path), FONT_DIR "%s.fnt", font_file[i]);
-+        fonts[i] = font_load(path);
-+    }
++    fonts_for_style(aui_style());
++    (void)path;
 +    for (int i = 0; i < SPR_COUNT; i++)
 +        load_sprite(i);
 +    {
@@ -7685,6 +8751,13 @@ index 0000000000..097749146d
 +
 +int aui_font(int which)
 +{
++    int sty = aui_style();
++    if (sty == STY_MOON || sty == STY_MODERN)
++    {
++        /* their own faces stand in for the 3D lettering */
++        if (which == AF_RETRO) which = AF_BIG;
++        else if (which == AF_RETRO_S || which == AF_RETRO_T) which = AF_SMALL;
++    }
 +    if (which == AF_RETRO_T) which = AF_RETRO_S;
 +    if (which < 0 || which >= AF_COUNT || fonts[which] < 0) return FONT_UI;
 +    return fonts[which];
@@ -7692,6 +8765,8 @@ index 0000000000..097749146d
 +/* the old pixel font (AF_RETRO, AF_RETRO_S) is drawn with the 3D lettering */
 +static int f3_of(int which)
 +{
++    int sty = aui_style();
++    if (sty == STY_MOON || sty == STY_MODERN) return -1;
 +    if (which == AF_RETRO && f3d_ok(F3D_BIG)) return F3D_BIG;
 +    if (which == AF_RETRO_S && f3d_ok(F3D_SMALL)) return F3D_SMALL;
 +    if (which == AF_RETRO_T && f3d_ok(F3D_TINY)) return F3D_TINY;
@@ -7757,6 +8832,7 @@ index 0000000000..097749146d
 +
 +int aui_loading_ticks(int which)
 +{
++    if (aui_style() == STY_ORIG || aui_style() == STY_DARK) return HZ / 12;
 +    if (aui_theme()->modern && anims[LDR_MODERN].handle > 0) which = LDR_MODERN;
 +    which = ldr_pick(which);
 +    int t = anims[which].handle > 0 ? anims[which].ms * HZ / 1000 : HZ / 5;
@@ -7808,6 +8884,31 @@ index 0000000000..097749146d
 +    aui_update();
 +}
 +
++/* Original / Dark: the iPod's twelve-spoke spinner */
++static void ipod_loading(const char *text, const char *sub, long start, bool dk)
++{
++    static const short sn[12] = { 0, 500, 866, 1000, 866, 500, 0, -500, -866, -1000, -866, -500 };
++    static const short cs[12] = { 1000, 866, 500, 0, -500, -866, -1000, -866, -500, 0, 500, 866 };
++    int cx = AUI_W / 2, cy = AUI_BAR + 80;
++    int head = (int)(((current_tick - start) * 12 / (HZ * 9 / 10)) % 12);
++    aui_vgrad(0, 0, AUI_W, AUI_H, dk ? 0x17181c : 0xffffff, dk ? 0x000000 : 0xe9ebef);
++    aui_topbar();
++    for (int i = 0; i < 12; i++)
++    {
++        int age = (head - i + 12) % 12;
++        int k = 255 - age * 18;
++        unsigned c = dk ? (unsigned)((k << 16) | (k << 8) | k)
++                        : (unsigned)(((255 - k * 4 / 5) << 16) | ((255 - k * 4 / 5) << 8) | (255 - k * 4 / 5));
++        aui_aa_line16(cx * 16 + sn[i] * 9 * 16 / 1000, cy * 16 - cs[i] * 9 * 16 / 1000,
++                      cx * 16 + sn[i] * 19 * 16 / 1000, cy * 16 - cs[i] * 19 * 16 / 1000, 64, c);
++    }
++    aui_present();
++    aui_text(AF_MED, AUI_W / 2, cy + 34, dk ? 0xffffff : 0x000000, text ? text : "Loading...", AUI_W - 20, 1);
++    if (sub) aui_text(AF_SMALLR, AUI_W / 2, cy + 54, dk ? 0xa9adb5 : 0x5d6372, sub, AUI_W - 20, 1);
++    aui_topbar_text("");
++    aui_update();
++}
++
 +static void loading_draw(int which, const char *text, const char *sub, long start, bool once)
 +{
 +    /* a screen you opened is still loading: don't let the screen time out
@@ -7824,6 +8925,11 @@ index 0000000000..097749146d
 +    {
 +        (void)text; (void)once;
 +        modern_loading(which == LDR_MUSIC ? NULL : sub, start);
++        return;
++    }
++    if (aui_style() == STY_ORIG || aui_style() == STY_DARK)
++    {
++        ipod_loading(text, sub, start, aui_style() == STY_DARK);
 +        return;
 +    }
 +    int show = ldr_pick(which);
@@ -7982,6 +9088,8 @@ index 0000000000..097749146d
 +
 +void aui_intro(int which)
 +{
++    /* the iPod looks open straight away, like the real thing */
++    if (aui_style() == STY_ORIG || aui_style() == STY_DARK) return;
 +    struct anim *a = &anims[ldr_pick(which)];
 +    long start = current_tick;
 +    long len = a->handle > 0 ? (long)a->n * a->ms * HZ / 1000 + HZ / 6 : 0;
@@ -8139,90 +9247,320 @@ index 0000000000..097749146d
 +            if (bolt_rows[r][c] == '#') rect(x + c, y + r, 1, 1, 0xffffff);
 +}
 +
++/* ---- little pixel pictures drawn from text rows ('#' = colour) ---- */
++void aui_pix(const char *const *rows, int n, int x, int y, unsigned rgb)
++{
++    for (int r = 0; r < n; r++)
++        for (int c = 0; rows[r][c]; c++)
++            if (rows[r][c] == '#') aui_fill(x + c, y + r, 1, 1, rgb);
++}
++
++/* today's moon as a small disc (d pixels across), lit side in 'lit' */
++void aui_moon_disc(int x, int y, int d, unsigned lit, unsigned dark)
++{
++    static const int cosv[8] = { 100, 71, 0, -71, -100, -71, 0, 71 };
++    struct tm *tm = get_time();
++    int p = asher_moon_phase(tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
++                             tm->tm_hour, tm->tm_min) & 7;
++    int c = cosv[p];
++    int r2 = d * d;                        /* (2r)^2, in half pixels */
++    for (int j = 0; j < d; j++)
++    {
++        int yy = 2 * j + 1 - d;
++        for (int i = 0; i < d; i++)
++        {
++            int xx = 2 * i + 1 - d;
++            if (xx * xx + yy * yy > r2) continue;
++            /* half width of the disc on this row, in half pixels */
++            int w = 0;
++            while ((w + 1) * (w + 1) + yy * yy <= r2) w++;
++            bool on = (p <= 4) ? (xx * 100 > w * c) : (xx * 100 < -w * c);
++            aui_fill(x + i, y + j, 1, 1, on ? lit : dark);
++        }
++    }
++}
++
++static int bar_play_state(void)
++{
++    int st = audio_status();
++    if (!(st & AUDIO_STATUS_PLAY)) return 0;
++    return (st & AUDIO_STATUS_PAUSE) ? 2 : 1;      /* 1 playing, 2 paused */
++}
++static bool bar_hold(void)
++{
++#ifdef HAS_BUTTON_HOLD
++    return button_hold();
++#else
++    return false;
++#endif
++}
++static bool bar_charging(void)
++{
++#if CONFIG_CHARGING
++    return charger_inserted();
++#else
++    return false;
++#endif
++}
++
++/* play (triangle) or pause (two bars), h pixels tall, into aui_fb */
++static void glyph_playpause(int x, int y, int h, bool pause, unsigned rgb)
++{
++    if (pause)
++    {
++        int bw = MAX(2, h / 4);
++        aui_fill(x, y, bw, h, rgb);
++        aui_fill(x + bw + MAX(2, h / 5), y, bw, h, rgb);
++    }
++    else
++        for (int k = 0; k < h * 3 / 4 + 1; k++)
++        {
++            int half = (h / 2) - (k * (h / 2)) / (h * 3 / 4 + 1);
++            aui_fill(x + k, y + h / 2 - half, 1, 2 * half + (h & 1), rgb);
++        }
++}
++/* padlock, 9 x 11 */
++static void glyph_lock(int x, int y, unsigned rgb, unsigned hole)
++{
++    aui_fill(x + 2, y, 5, 1, rgb);
++    aui_fill(x + 1, y + 1, 2, 4, rgb);
++    aui_fill(x + 6, y + 1, 2, 4, rgb);
++    aui_round(x, y + 4, 9, 7, 1, rgb, rgb);
++    aui_fill(x + 4, y + 6, 1, 3, hole);
++}
++
++/* the iPod's own battery: a glossy capsule with a nub */
++static void batt_ipod(int x, int y, int pct, bool dark)
++{
++    unsigned edge = dark ? 0xc9ccd3 : 0x50555e;
++    aui_round(x, y, 24, 12, 2, edge, edge);
++    aui_round(x + 1, y + 1, 22, 10, 1, dark ? 0x26282e : 0xf6f7f9, dark ? 0x101114 : 0xd9dce2);
++    aui_fill(x + 24, y + 3, 2, 6, edge);
++    if (pct >= 0)
++    {
++        int f = (pct * 20 + 50) / 100;
++        unsigned c = aui_batt_rgb(pct);
++        if (f > 0)
++        {
++            aui_vgrad(x + 2, y + 2, f, 8, c, c);
++            aui_shade(x + 2, y + 2, f, 3, 0, 150, 0xffffff);   /* gloss */
++            aui_shade(x + 2, y + 7, f, 3, 0, 200, 0x000000);
++        }
++    }
++    if (bar_charging()) aui_bolt(aui_fill, x + 8, y + 2);
++}
++
++bool aui_bar_dark;          /* Modern: the bar sits on a dark picture */
++/* a phone battery: thin rounded outline, solid fill, pill nub */
++static void batt_phone(int x, int y, int pct)
++{
++    bool chg = bar_charging();
++    unsigned edge = aui_bar_dark ? 0xa0a0a6 : 0x9b9ba1;
++    aui_round(x, y, 25, 13, 4, edge, edge);
++    if (aui_bar_dark) aui_shade(x + 1, y + 1, 23, 11, 3, 120, 0x000000);
++    else aui_round(x + 1, y + 1, 23, 11, 3, 0xf4f4f6, 0xf4f4f6);
++    aui_round(x + 26, y + 4, 2, 5, 1, edge, edge);
++    if (pct >= 0)
++    {
++        int f = (pct * 21 + 50) / 100;
++        unsigned c = chg ? 0x30d158 : (pct <= 20 ? 0xff3b30 : (aui_bar_dark ? 0xffffff : 0x1c1c1e));
++        if (f > 0) aui_round(x + 2, y + 2, MAX(f, 4), 9, 2, c, c);
++    }
++    if (chg) aui_bolt(aui_fill, x + 9, y + 2);
++}
++
++/* MoonPod: a chunky pixel battery with four cells */
++static void batt_pixel(int x, int y, int pct)
++{
++    unsigned edge = 0xe9e3d3, dim = 0x2a2140;
++    aui_fill(x + 1, y, 22, 2, edge);
++    aui_fill(x + 1, y + 12, 22, 2, edge);
++    aui_fill(x, y + 1, 2, 12, edge);
++    aui_fill(x + 22, y + 1, 2, 12, edge);
++    aui_fill(x + 24, y + 4, 2, 6, edge);
++    int cells = pct < 0 ? 0 : (pct + 24) / 25;
++    unsigned c = pct < 0 ? dim : aui_batt_rgb(pct);
++    for (int i = 0; i < 4; i++)
++        aui_fill(x + 3 + i * 5, y + 3, 4, 8, i < cells ? c : dim);
++    if (bar_charging()) aui_bolt(aui_fill, x + 8, y + 3);
++}
++
 +void aui_topbar(void)
 +{
 +    const struct aui_theme *t = aui_theme();
 +    int bat = battery_level();
-+    int bx = AUI_W - 34, by = 9;
-+    if (t->modern)
++    int sty = aui_style();
++    int ps = bar_play_state();
++    bool hold = bar_hold();
++
++    if (sty == STY_ORIG || sty == STY_DARK)
 +    {
-+        if (!aui_sprite(SPR_BAR_MODERN, 0, 0))
++        bool dk = sty == STY_DARK;
++        aui_vgrad(0, 0, AUI_W, AUI_BAR, dk ? 0x55585f : 0xfdfdfe, dk ? 0x1d1f24 : 0xc4c9d1);
++        aui_fill(0, 0, AUI_W, 1, dk ? 0x6a6d75 : 0xffffff);
++        aui_fill(0, AUI_BAR - 1, AUI_W, 1, dk ? 0x000000 : 0x7d838d);
++        unsigned ic = dk ? 0x6ab4ff : 0x2f6fd8;
++        int x = 9;
++        if (ps)
 +        {
-+            aui_fill(0, 0, AUI_W, AUI_BAR, 0xf8f8fa);
-+            aui_fill(0, AUI_BAR - 1, AUI_W, 1, 0xd6d6dc);
++            glyph_playpause(x, 9, 12, ps == 1, ic);
++            x += 17;
 +        }
++        if (hold) glyph_lock(x, 9, dk ? 0xd8dbe2 : 0x4d525b, dk ? 0x2a2c31 : 0xe4e6ea);
++        batt_ipod(AUI_W - 33, 9, bat, dk);
++        return;
 +    }
-+    else if (!aui_sprite(t->light ? SPR_BAR_LIGHT : SPR_BAR_DARK, 0, 0))
++    if (sty == STY_MODERN)
++    {
++        /* frosted strip, no rule: it melts into the page */
++        if (!aui_bar_dark) aui_shade(0, 0, AUI_W, AUI_BAR, 0, 70, 0xf7f7f9);
++        /* the island */
++        int pw = (ps || hold || bar_charging()) ? 84 : 58, px0 = (AUI_W - pw) / 2;
++        aui_round(px0, 4, pw, 22, 11, 0x000000, 0x000000);
++        if (ps)
++        {
++            /* a small coloured tile for the song, and live level bars */
++            aui_round(px0 + 6, 8, 14, 14, 4, t->accent, 0xff2d55);
++            aui_fill(px0 + 11, 11, 2, 7, 0xffffff);
++            aui_fill(px0 + 11, 11, 5, 2, 0xffffff);
++            static const unsigned char lv[4][6] = {
++                { 3, 7, 5, 9, 4, 8 }, { 8, 4, 9, 5, 7, 3 },
++                { 5, 9, 3, 6, 9, 5 }, { 7, 3, 8, 4, 5, 9 } };
++            int ph = (current_tick / (HZ / 5)) % 6;
++            for (int i = 0; i < 4; i++)
++            {
++                int h = ps == 1 ? lv[i][(ph + i) % 6] + 1 : 2;
++                aui_round(px0 + pw - 30 + i * 5, 15 - h / 2, 3, h, 1, 0x30d158, 0x30d158);
++            }
++        }
++        if (hold) glyph_lock(px0 + pw / 2 - 4 + (ps ? 0 : 0), 9, ps ? 0xff9f0a : 0xffffff, 0x000000);
++        else if (!ps && bar_charging())
++            aui_bolt(aui_fill, px0 + pw / 2 - 3, 11);
++        batt_phone(AUI_W - 38, 9, bat);
++        return;
++    }
++    if (sty == STY_MOON)
++    {
++        aui_vgrad(0, 0, AUI_W, AUI_BAR, 0x0d0a17, 0x07060d);
++        /* stars that sit still (a fixed pattern) */
++        static const unsigned char st[][2] = {
++            { 58, 5 }, { 96, 21 }, { 131, 4 }, { 188, 22 }, { 210, 6 }, { 150, 24 }, { 77, 13 } };
++        for (unsigned i = 0; i < sizeof(st) / 2; i++)
++            aui_fill(st[i][0], st[i][1], 1, 1, i & 1 ? 0x6d5f99 : 0xb9a7ff);
++        /* dashed horizon */
++        for (int x = 0; x < AUI_W; x += 4) aui_fill(x, AUI_BAR - 1, 2, 1, 0x3a2a5c);
++        aui_moon_disc(6, 7, 15, 0xe9e3d3, 0x241c38);
++        int x = AUI_W - 64;
++        if (hold)
++        {
++            static const char *const lk[] = {
++                "..####..", ".#....#.", ".#....#.", "########",
++                "########", "###..###", "###..###", "########", "########" };
++            aui_pix(lk, 9, x - 12, 10, 0xb9a7ff);
++        }
++        if (ps)
++        {
++            if (ps == 1) { aui_fill(x - 26, 10, 3, 10, 0xe9e3d3); aui_fill(x - 21, 10, 3, 10, 0xe9e3d3); }
++            else
++                for (int k = 0; k < 6; k++)
++                    aui_fill(x - 26 + k, 10 + k, 1, 10 - 2 * k, 0xe9e3d3);
++        }
++        batt_pixel(AUI_W - 30, 8, bat);
++        return;
++    }
++
++    /* Retro: the glossy picture bar */
++    int bx = AUI_W - 34, by = 9;
++    if (!aui_sprite(t->light ? SPR_BAR_LIGHT : SPR_BAR_DARK, 0, 0))
 +        aui_vgrad(0, 0, AUI_W, AUI_BAR, t->light ? 0xf4f5f8 : 0x15173a,
 +                  t->light ? 0xc9ced8 : 0x0a0b1c);
-+    /* battery outline is part of the bar picture; draw the fill */
 +    if (bat >= 0)
 +    {
-+        /* fill the whole inside of the outline, so the picture matches
-+         * the number (it used to leave a gap that made it look emptier) */
 +        int f = (bat * 22 + 50) / 100;
 +        unsigned c = aui_batt_rgb(bat);
 +        if (f > 0) aui_fill(bx + 1, by + 1, f, 10, c);
-+#if CONFIG_CHARGING
-+        if (charger_inserted())
++        if (bar_charging())
 +            aui_bolt(aui_fill, bx + 1 + 11 - 3, by + 2);
-+#endif
 +    }
++    if (ps)
++        glyph_playpause(224, 9, 12, ps == 1, 0xffffff);
++    if (hold)
++        glyph_lock(ps ? 208 : 224, 9, 0xffffff, 0x15173a);
 +}
++
++static const char *const day_n[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
++static const char *const mon_n[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
++                                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 +
 +void aui_topbar_text(const char *title)
 +{
-+    const struct aui_theme *t = aui_theme();
-+    static const char *dn[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-+    static const char *mn[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-+                                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 +    char buf[24];
++    int sty = aui_style();
++    int bat = battery_level();
++    struct tm *tm = get_time();
++
++    if (sty == STY_ORIG || sty == STY_DARK)
++    {
++        bool dk = sty == STY_DARK;
++        unsigned c = dk ? 0xffffff : 0x000000;
++        int fh = aui_font_h(AF_MED), y = (AUI_BAR - fh) / 2;
++        if (!title || !title[0] || !strcmp(title, "Asher OS"))
++        {
++            /* home: the clock in the middle, like the iPod's own option */
++            aui_time_str(buf, sizeof(buf));
++            title = buf;
++        }
++        if (!dk) aui_text(AF_MED, AUI_W / 2, y + 1, 0xffffff, title, 150, 1);   /* emboss */
++        aui_text(AF_MED, AUI_W / 2, y, c, title, 150, 1);
++        if (bat >= 0)
++        {
++            snprintf(buf, sizeof(buf), "%d%%", bat);
++            aui_text(AF_SMALLR, AUI_W - 37, (AUI_BAR - aui_font_h(AF_SMALLR)) / 2, dk ? 0xc9ccd3 : 0x40444c, buf, 40, 2);
++        }
++        return;
++    }
++    if (sty == STY_MODERN)
++    {
++        aui_time_str(buf, sizeof(buf));
++        char *sp = strchr(buf, ' ');      /* phones leave off AM / PM */
++        if (sp) *sp = 0;
++        int fh = aui_font_h(AF_MED);
++        unsigned c = aui_bar_dark ? 0xffffff : 0x000000;
++        aui_text(AF_MED, 22, (AUI_BAR - fh) / 2, c, buf, 70, 0);
++        if (bat >= 0)
++        {
++            snprintf(buf, sizeof(buf), "%d", bat);
++            aui_text(AF_SMALL, AUI_W - 42, (AUI_BAR - aui_font_h(AF_SMALL)) / 2, c, buf, 30, 2);
++        }
++        return;
++    }
++    if (sty == STY_MOON)
++    {
++        aui_time_str(buf, sizeof(buf));
++        aui_text(AF_SMALL, 27, 0, 0xe9e3d3, buf, 70, 0);
++        snprintf(buf, sizeof(buf), "%s %s %d", day_n[tm->tm_wday % 7], mon_n[tm->tm_mon % 12], tm->tm_mday);
++        aui_text(AF_SMALLR, 27, 14, 0x9d93b8, buf, 80, 0);
++        if (title && title[0] && strcmp(title, "Asher OS"))
++            aui_text(AF_MED, 170, (AUI_BAR - aui_font_h(AF_MED)) / 2, 0xb9a7ff, title, 92, 1);
++        if (bat >= 0)
++        {
++            snprintf(buf, sizeof(buf), "%d%%", bat);
++            aui_text(AF_SMALLR, AUI_W - 33, (AUI_BAR - aui_font_h(AF_SMALLR)) / 2, 0xe9e3d3, buf, 32, 2);
++        }
++        return;
++    }
++
++    /* Retro */
++    const struct aui_theme *t = aui_theme();
 +    unsigned c = t->light ? 0x161616 : 0xffffff;
 +    unsigned c2 = t->light ? 0x55555c : 0xc8cde6;
-+    /* time on top, day and date under it */
 +    aui_time_str(buf, sizeof(buf));
 +    aui_text(AF_SMALL, 34, 1, c, buf, 84, 0);
-+    struct tm *tm = get_time();
-+    snprintf(buf, sizeof(buf), "%s %s %d", dn[tm->tm_wday % 7], mn[tm->tm_mon % 12], tm->tm_mday);
++    snprintf(buf, sizeof(buf), "%s %s %d", day_n[tm->tm_wday % 7], mon_n[tm->tm_mon % 12], tm->tm_mday);
 +    aui_text(AF_SMALLR, 34, 15, c2, buf, 84, 0);
 +    int fh = aui_font_h(AF_MED), y = (AUI_BAR - fh) / 2;
 +    if (title && title[0])
 +        aui_text(AF_MED, 168, y, c, title, 100, 1);
-+    /* play / pause sign: only when a song is loaded */
-+    int st = audio_status();
-+    if (st & AUDIO_STATUS_PLAY)
-+    {
-+        lcd_set_drawmode(DRMODE_SOLID);
-+        lcd_set_foreground(LCD_RGBPACK((c >> 16) & 255, (c >> 8) & 255, c & 255));
-+        int ix = 224, iy = 9;
-+        /* like a phone: while playing it shows the pause button, while
-+         * paused the play button */
-+        if (!(st & AUDIO_STATUS_PAUSE))
-+        {
-+            lcd_fillrect(ix + 1, iy, 3, 12);
-+            lcd_fillrect(ix + 6, iy, 3, 12);
-+        }
-+        else
-+            for (int k = 0; k < 9; k++)        /* a small triangle */
-+            {
-+                int half = 6 - (k * 6 + 4) / 9;
-+                lcd_vline(ix + 1 + k, iy + 6 - half, iy + 5 + half);
-+            }
-+    }
-+#ifdef HAS_BUTTON_HOLD
-+    /* 2.5.8: a padlock while the hold switch is on, like the iPod's own */
-+    if (button_hold())
-+    {
-+        int lx = (st & AUDIO_STATUS_PLAY) ? 208 : 224, ly = 8;
-+        lcd_set_drawmode(DRMODE_SOLID);
-+        lcd_set_foreground(LCD_RGBPACK((c >> 16) & 255, (c >> 8) & 255, c & 255));
-+        lcd_fillrect(lx, ly + 6, 11, 8);              /* body */
-+        lcd_fillrect(lx + 2, ly + 1, 2, 5);           /* shackle */
-+        lcd_fillrect(lx + 7, ly + 1, 2, 5);
-+        lcd_fillrect(lx + 3, ly, 5, 2);
-+    }
-+#endif
-+    int bat = battery_level();
 +    if (bat >= 0)
 +    {
 +        snprintf(buf, sizeof(buf), "%d%%", bat);
@@ -8413,10 +9751,10 @@ index 0000000000..097749146d
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..b586ceb6fa
+index 0000000000..68cca6825f
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,132 @@
 +/* Asher OS shared drawing layer.
 + * Screens are composed into an off-screen buffer (aui_fb): wallpaper,
 + * glass panels and alpha-blended sprites. The buffer is then copied to the
@@ -8462,11 +9800,18 @@ index 0000000000..b586ceb6fa
 +    SPR_M_NPBG,                                             /* Modern Now Playing backdrop */
 +    SPR_P_MUSIC, SPR_P_SETTINGS, SPR_P_STATS, SPR_P_PLAY,   /* MoonPod moons */
 +    SPR_P_MUSIC_S, SPR_P_SETTINGS_S, SPR_P_STATS_S, SPR_P_PLAY_S,
++    SPR_MD_MUSIC, SPR_MD_SETTINGS, SPR_MD_STATS, SPR_MD_PLAY,  /* Modern dock (2.7) */
++    SPR_MD_MUSIC_S, SPR_MD_SETTINGS_S, SPR_MD_STATS_S, SPR_MD_PLAY_S,
 +    SPR_COUNT
 +};
 +
-+/* fonts */
-+enum { AF_BIG, AF_MED, AF_SMALL, AF_SMALLR, AF_RETRO, AF_RETRO_S, AF_COUNT };
++/* the five looks (Settings > Theme), in theme order */
++enum { STY_RETRO, STY_ORIG, STY_DARK, STY_MODERN, STY_MOON, STY_COUNT };
++int  aui_style(void);
++void aui_style_changed(void);        /* the theme changed: fonts and so on */
++
++/* fonts (each look has its own set; AF_TITLE is the big heading face) */
++enum { AF_BIG, AF_MED, AF_SMALL, AF_SMALLR, AF_RETRO, AF_RETRO_S, AF_TITLE, AF_COUNT };
 +#define AF_RETRO_T (AF_COUNT + 1)   /* compact 3D lettering (Stats widgets) */
 +
 +/* loading animations */
@@ -8501,6 +9846,18 @@ index 0000000000..b586ceb6fa
 +unsigned aui_batt_rgb(int pct);
 +/* the charging bolt (7x8 plus a 1 pixel edge) at x, y, drawn with rect() */
 +void aui_bolt(void (*rect)(int x, int y, int w, int h, unsigned rgb), int x, int y);
++void aui_pix(const char *const *rows, int n, int x, int y, unsigned rgb);
++void aui_moon_disc(int x, int y, int d, unsigned lit, unsigned dark);
++void aui_night_sky(int y0, int y1);              /* MoonPod backdrop */
++void aui_px_box(int x, int y, int w, int h, unsigned fill, unsigned edge);
++/* smooth shapes (anti-aliased) */
++void aui_aa_px(int x, int y, int cov, unsigned rgb);
++void aui_aa_arc(int cx, int cy, int ro, int ri, int upto, unsigned rgb);
++void aui_aa_line16(int x0, int y0, int x1, int y1, int w16, unsigned rgb);
++void aui_aa_tri(int x0, int y0, int x1, int y1, int x2, int y2, unsigned rgb);
++void aui_reflect(int x, int y, int w, int h, int rh, int strength);
++void aui_corners(int x, int y, int w, int h, int r, const fb_data *under, unsigned rgb);
++extern bool aui_bar_dark;                       /* Modern bar over a dark picture */
 +void aui_topbar(void);                          /* compose part of the bar */
 +
 +/* ---- output ---- */
@@ -8526,8 +9883,347 @@ index 0000000000..b586ceb6fa
 +bool aui_woke(void);                    /* screen just turned back on? */
 +extern bool aui_dirty;                  /* set to make the screen redraw */
 +extern long aui_quiet_until;
-+#define ASHER_ASSETS_VERSION "2.6"
++#define ASHER_OS_VERSION "2.7.0"
++#define ASHER_ASSETS_VERSION "2.7"
 +extern bool aui_assets_old;      /* the .rockbox picture files are older than the firmware */            /* skip loading screens until this tick */
++#endif
+diff --git a/apps/asher/asher_usb.c b/apps/asher/asher_usb.c
+new file mode 100644
+index 0000000000..8fdd0b3fbf
+--- /dev/null
++++ b/apps/asher/asher_usb.c
+@@ -0,0 +1,319 @@
++/* Asher OS 2.7: the "connected to a computer" screens, one per theme.
++ * Everything here is drawn by code (nothing is read from the drive, which
++ * belongs to the computer while this is up) and always has something
++ * moving, so it's easy to tell the iPod hasn't frozen. */
++#include <stdio.h>
++#include <string.h>
++#include "config.h"
++#include "system.h"
++#include "kernel.h"
++#include "lcd.h"
++#include "powermgmt.h"
++#include "power.h"
++#include "asher_ui.h"
++#include "asher_usb.h"
++
++static int sty_now = -1;
++
++bool asher_usbs_on(void)
++{
++    int s = aui_style();
++    return s == STY_ORIG || s == STY_DARK || s == STY_MODERN || s == STY_MOON;
++}
++
++static void put_rect(int x, int y, int w, int h)
++{
++    lcd_set_viewport(NULL);
++    lcd_bitmap_part(aui_fb, x, y, AUI_W, x, y, w, h);
++    lcd_update_rect(x, y, w, h);
++}
++
++static unsigned mix(unsigned a, unsigned b, int t, int n)
++{
++    unsigned r = 0;
++    for (int sh = 0; sh <= 16; sh += 8)
++    {
++        int ca = (a >> sh) & 255, cb = (b >> sh) & 255;
++        r |= (unsigned)(ca + (cb - ca) * t / n) << sh;
++    }
++    return r;
++}
++/* the iPod screens' background, so a repaint blends right in */
++#define IP_TOP(d) ((d) ? 0x17181cu : 0xffffffu)
++#define IP_BOT(d) ((d) ? 0x000000u : 0xe9ebefu)
++static void ip_bg(bool dark, int x, int y, int w, int h)
++{
++    aui_vgrad(x, y, w, h, mix(IP_TOP(dark), IP_BOT(dark), y, AUI_H - 1),
++              mix(IP_TOP(dark), IP_BOT(dark), y + h - 1, AUI_H - 1));
++}
++
++static int tick_frame(int ms) { return (int)((long)current_tick * (1000 / HZ) / ms); }
++
++static void batt_line(unsigned rgb, int font, int y)
++{
++    char buf[32];
++    int b = battery_level();
++    if (b < 0) return;
++#if CONFIG_CHARGING
++    if (charger_inserted())
++        snprintf(buf, sizeof(buf), b >= 100 ? "Charged  %d%%" : "Charging  %d%%", b);
++    else
++#endif
++        snprintf(buf, sizeof(buf), "Battery  %d%%", b);
++    aui_text(font, AUI_W / 2, y, rgb, buf, AUI_W - 20, 1);
++}
++
++/* ------------------------------------------------------------------ */
++/* Original / Dark: the iPod's own "Do not disconnect" screen          */
++/* ------------------------------------------------------------------ */
++#define SP_X (AUI_W / 2)
++#define SP_Y 214
++static void spinner(bool dark)
++{
++    /* the classic twelve-spoke spinner */
++    static const short sn[12] = { 0, 500, 866, 1000, 866, 500, 0, -500, -866, -1000, -866, -500 };
++    static const short cs[12] = { 1000, 866, 500, 0, -500, -866, -1000, -866, -500, 0, 500, 866 };
++    int ph = tick_frame(80) % 12;
++    ip_bg(dark, SP_X - 13, SP_Y - 13, 26, 26);
++    for (int i = 0; i < 12; i++)
++    {
++        int age = (ph - i + 12) % 12;                   /* 0 = the bright one */
++        int k = 255 - age * 17;
++        unsigned c = dark ? (unsigned)((k << 16) | (k << 8) | k)
++                          : (unsigned)(((255 - k * 3 / 4) << 16) | ((255 - k * 3 / 4) << 8) | (255 - k * 3 / 4));
++        int x0 = SP_X * 16 + sn[i] * 5 * 16 / 1000, y0 = SP_Y * 16 - cs[i] * 5 * 16 / 1000;
++        int x1 = SP_X * 16 + sn[i] * 10 * 16 / 1000, y1 = SP_Y * 16 - cs[i] * 10 * 16 / 1000;
++        aui_aa_line16(x0, y0, x1, y1, 40, c);
++    }
++}
++
++static void ipod_icon(bool dark, bool ok)
++{
++    int cx = AUI_W / 2, cy = 84;
++    if (ok)
++    {
++        /* a blue disc with a white tick: safe to unplug */
++        aui_aa_arc(cx, cy, 46, 0, 3600, dark ? 0x3d8ef0 : 0x2f6fd8);
++        aui_aa_arc(cx, cy - 8, 38, 0, 3600, dark ? 0x5aa3f5 : 0x4c8ae6);
++        aui_aa_arc(cx, cy, 46, 41, 3600, dark ? 0x2a6fd0 : 0x2058b8);
++        aui_aa_line16((cx - 20) * 16, (cy + 1) * 16, (cx - 6) * 16, (cy + 15) * 16, 110, 0xffffff);
++        aui_aa_line16((cx - 6) * 16, (cy + 15) * 16, (cx + 22) * 16, (cy - 15) * 16, 110, 0xffffff);
++        return;
++    }
++    /* the circle with a slash, in brushed grey */
++    unsigned top = dark ? 0xd9dce2 : 0x8f949c, bot = dark ? 0x7b808a : 0x41454c;
++    aui_aa_arc(cx, cy, 50, 39, 3600, bot);
++    aui_aa_arc(cx, cy - 1, 49, 40, 3600, top);
++    aui_aa_line16((cx - 28) * 16, (cy - 28) * 16, (cx + 28) * 16, (cy + 28) * 16, 160, bot);
++    aui_aa_line16((cx - 28) * 16, (cy - 29) * 16, (cx + 28) * 16, (cy + 27) * 16, 140, top);
++}
++
++static void draw_ipod(bool full, bool dark, bool eject, int pct)
++{
++    if (full)
++    {
++        ip_bg(dark, 0, 0, AUI_W, AUI_H);
++        ipod_icon(dark, eject);
++        if (!eject) spinner(dark);
++        aui_present();
++        unsigned c = dark ? 0xffffff : 0x000000, c2 = dark ? 0xa2a6ae : 0x5d6372;
++        aui_text(AF_TITLE, AUI_W / 2, 146, c, eject ? "OK to disconnect." : "Do not disconnect.", AUI_W - 16, 1);
++        aui_text(AF_SMALLR, AUI_W / 2, 174, c2, eject ? "Finishing up..." : "Eject before disconnecting.", AUI_W - 16, 1);
++        if (eject) batt_line(c2, AF_SMALLR, 220);
++        lcd_update();
++        return;
++    }
++    if (eject)
++    {
++        /* the iPod's glossy progress bar */
++        int x = 50, y = 198, w = AUI_W - 100, h = 12;
++        ip_bg(dark, x - 2, y - 2, w + 4, h + 4);
++        aui_round(x, y, w, h, 3, dark ? 0x5c6068 : 0x8a9099, dark ? 0x5c6068 : 0x8a9099);
++        aui_round(x + 1, y + 1, w - 2, h - 2, 2, dark ? 0x202226 : 0xffffff, dark ? 0x2c2e33 : 0xe2e5ea);
++        int f = (w - 2) * pct / 1000;
++        if (f > 2)
++        {
++            aui_round(x + 1, y + 1, f, h - 2, 2, 0x82c0fa, 0x1b67d4);
++            aui_shade(x + 1, y + 1, f, 4, 0, 160, 0xffffff);
++        }
++        put_rect(x - 2, y - 2, w + 4, h + 4);
++        return;
++    }
++    spinner(dark);
++    put_rect(SP_X - 13, SP_Y - 13, 26, 26);
++}
++
++/* ------------------------------------------------------------------ */
++/* Modern: iPod and laptop with the data flowing between them          */
++/* ------------------------------------------------------------------ */
++#define MD_Y 78
++static void md_devices(void)
++{
++    /* the iPod */
++    int ix = 58, iy = MD_Y - 30;
++    aui_round(ix, iy, 38, 60, 8, 0x2c2c2e, 0x1c1c1e);
++    aui_round(ix + 4, iy + 4, 30, 22, 3, 0x64d2ff, 0x0a84ff);
++    aui_aa_arc(ix + 19, iy + 43, 11, 0, 3600, 0x48484a);
++    aui_aa_arc(ix + 19, iy + 43, 4, 0, 3600, 0x2c2c2e);
++    /* the laptop */
++    int lx = 194, ly = MD_Y - 26;
++    aui_round(lx, ly, 72, 46, 5, 0x2c2c2e, 0x1c1c1e);
++    aui_round(lx + 4, ly + 4, 64, 38, 2, 0x64d2ff, 0x5e5ce6);
++    aui_round(lx - 8, ly + 46, 88, 6, 3, 0xd1d1d6, 0xaeaeb2);
++    aui_fill(lx + 28, ly + 46, 16, 2, 0x8e8e93);
++}
++static void md_flow(bool done)
++{
++    int x0 = 108, x1 = 182, n = 7;
++    aui_fill(x0 - 4, MD_Y - 8, x1 - x0 + 8, 16, 0xf7f7f9);
++    if (done)
++    {
++        aui_aa_arc((x0 + x1) / 2, MD_Y, 8, 0, 3600, 0x30d158);
++        aui_aa_line16(((x0 + x1) / 2 - 4) * 16, MD_Y * 16, ((x0 + x1) / 2 - 1) * 16, (MD_Y + 3) * 16, 28, 0xffffff);
++        aui_aa_line16(((x0 + x1) / 2 - 1) * 16, (MD_Y + 3) * 16, ((x0 + x1) / 2 + 4) * 16, (MD_Y - 3) * 16, 28, 0xffffff);
++        return;
++    }
++    int ph = tick_frame(110) % (n + 3);
++    for (int i = 0; i < n; i++)
++    {
++        int cx = x0 + i * (x1 - x0) / (n - 1);
++        int d = ph - i;
++        unsigned c = d == 0 ? 0x0a84ff : d == 1 ? 0x63a9ff : d == 2 ? 0xa9cdff : 0xd1d1d6;
++        aui_aa_arc(cx, MD_Y, d == 0 ? 4 : 3, 0, 3600, c);
++    }
++}
++static void draw_modern(bool full, bool eject, int pct)
++{
++    if (full)
++    {
++        aui_fill(0, 0, AUI_W, AUI_H, 0xf7f7f9);
++        md_devices();
++        md_flow(eject);
++        aui_round(AUI_W / 2 - 70, 204, 140, 24, 12, 0xe9e9ee, 0xe9e9ee);
++        aui_present();
++        aui_text(AF_TITLE, AUI_W / 2, 122, 0x000000, eject ? "Ready to Unplug" : "Connected", AUI_W - 16, 1);
++        aui_text(AF_SMALLR, AUI_W / 2, 156, 0x6e6e73,
++                 eject ? "Finishing up. This only takes a moment." : "Eject from your computer before unplugging.", AUI_W - 16, 1);
++        batt_line(0x3a3a3c, AF_SMALL, 204 + (24 - aui_font_h(AF_SMALL)) / 2);
++        lcd_update();
++        return;
++    }
++    if (eject)
++    {
++        int x = 70, y = 184, w = AUI_W - 140;
++        aui_fill(x - 2, y - 2, w + 4, 10, 0xf7f7f9);
++        aui_round(x, y, w, 6, 3, 0xe5e5ea, 0xe5e5ea);
++        int f = w * pct / 1000;
++        if (f >= 6) aui_round(x, y, f, 6, 3, 0x0a84ff, 0x0a84ff);
++        put_rect(x - 2, y - 2, w + 4, 10);
++        return;
++    }
++    md_flow(false);
++    put_rect(104, MD_Y - 8, 82, 16);
++}
++
++/* ------------------------------------------------------------------ */
++/* MoonPod: a pixel moon plugged into the night                        */
++/* ------------------------------------------------------------------ */
++#define MN_CX (AUI_W / 2)
++#define MN_CY 62
++static void mn_moon(void)
++{
++    /* chunky: drawn at half size, each pixel doubled */
++    static const char *const cr[] = { "....", ".##.", ".###", "..#." };
++    int r = 18;
++    for (int j = -r; j < r; j++)
++        for (int i = -r; i < r; i++)
++        {
++            int d = (2 * i + 1) * (2 * i + 1) + (2 * j + 1) * (2 * j + 1);
++            if (d > 4 * r * r) continue;
++            unsigned c = d > 4 * (r - 1) * (r - 1) ? 0xb3a99a : 0xe9e3d3;
++            if (i > r / 3 && d > 4 * (r / 2) * (r / 2)) c = 0xcfc6b4;   /* soft shade */
++            aui_fill(MN_CX + 2 * i, MN_CY + 2 * j, 2, 2, c);
++        }
++    /* craters */
++    static const signed char cp[][2] = { { -9, -6 }, { 3, 4 }, { -4, 8 }, { 8, -9 } };
++    for (unsigned k = 0; k < sizeof(cp) / 2; k++)
++        for (int j = 0; j < 4; j++)
++            for (int i = 0; cr[j][i]; i++)
++                if (cr[j][i] == '#')
++                    aui_fill(MN_CX + 2 * (cp[k][0] + i), MN_CY + 2 * (cp[k][1] + j), 2, 2, 0xc4b9a6);
++    /* the cable out of the bottom, ending in a plug */
++    aui_fill(MN_CX - 3, MN_CY + 2 * r, 6, 26, 0x5f5388);
++    aui_px_box(MN_CX - 10, MN_CY + 2 * r + 24, 20, 14, 0xe9e3d3, 0xb3a99a);
++    aui_fill(MN_CX - 5, MN_CY + 2 * r + 38, 10, 6, 0x9d93b8);
++}
++static void mn_twinkle(void)
++{
++    /* the data blip running down the cable, and a few stars that twinkle */
++    int y0 = MN_CY + 36, f = tick_frame(90);
++    aui_fill(MN_CX - 3, y0, 6, 26, 0x5f5388);
++    int k = f % 6;
++    if (k < 5) aui_fill(MN_CX - 3, y0 + k * 5, 6, 4, 0xffe9a8);
++    static const short st[][2] = { { 40, 30 }, { 268, 46 }, { 86, 104 }, { 236, 118 }, { 30, 196 }, { 292, 190 } };
++    for (unsigned i = 0; i < sizeof(st) / sizeof(st[0]); i++)
++    {
++        bool on = ((f / 4 + i * 3) % 7) < 3;
++        unsigned c = on ? 0xffffff : 0x3a3156;
++        aui_fill(st[i][0] - 2, st[i][1], 5, 1, on ? 0x8e80c4 : 0x0b0912);
++        aui_fill(st[i][0], st[i][1] - 2, 1, 5, on ? 0x8e80c4 : 0x0b0912);
++        aui_fill(st[i][0], st[i][1], 1, 1, c);
++    }
++}
++static void draw_moon(bool full, bool eject, int pct)
++{
++    if (full)
++    {
++        aui_night_sky(0, AUI_H);
++        /* blank where the twinkling stars go so they sit on clean sky */
++        mn_moon();
++        mn_twinkle();
++        aui_present();
++        aui_text(AF_TITLE, AUI_W / 2 + 1, 147, 0x000000, eject ? "SAFE TO UNPLUG" : "CONNECTED", AUI_W - 16, 1);
++        aui_text(AF_TITLE, AUI_W / 2, 146, 0xb9a7ff, eject ? "SAFE TO UNPLUG" : "CONNECTED", AUI_W - 16, 1);
++        aui_text(AF_SMALLR, AUI_W / 2, 174, 0xe9e3d3,
++                 eject ? "tucking the moon in..." : "eject before unplugging", AUI_W - 16, 1);
++        batt_line(0x8d84a8, AF_SMALLR, 218);
++        lcd_update();
++        return;
++    }
++    if (eject)
++    {
++        /* ten chunky cells fill up */
++        int x = 80, y = 196, cells = 10, cw = 16;
++        aui_px_box(x - 4, y - 4, cells * cw + 6, 20, 0x0b0912, 0x6d5f99);
++        int on = (pct * cells + 999) / 1000;
++        for (int i = 0; i < cells; i++)
++            aui_fill(x + i * cw, y, cw - 4, 12, i < on ? 0xb9a7ff : 0x241c38);
++        put_rect(x - 4, y - 4, cells * cw + 6, 20);
++        return;
++    }
++    mn_twinkle();
++    put_rect(MN_CX - 3, MN_CY + 36, 6, 26);
++    static const short st[][2] = { { 40, 30 }, { 268, 46 }, { 86, 104 }, { 236, 118 }, { 30, 196 }, { 292, 190 } };
++    for (unsigned i = 0; i < sizeof(st) / sizeof(st[0]); i++)
++        put_rect(st[i][0] - 2, st[i][1] - 2, 5, 5);
++}
++
++/* ------------------------------------------------------------------ */
++void asher_usbs_draw(bool full)
++{
++    int s = aui_style();
++    if (s != sty_now) { full = true; sty_now = s; }
++    lcd_set_viewport(NULL);
++    lcd_set_drawmode(DRMODE_SOLID);
++    if (s == STY_MODERN) draw_modern(full, false, 0);
++    else if (s == STY_MOON) draw_moon(full, false, 0);
++    else draw_ipod(full, s == STY_DARK, false, 0);
++}
++
++void asher_usbs_eject(bool full, int pct)
++{
++    int s = aui_style();
++    sty_now = -1;                         /* back to "connected" draws in full */
++    lcd_set_viewport(NULL);
++    lcd_set_drawmode(DRMODE_SOLID);
++    if (s == STY_MODERN) { if (full) draw_modern(true, true, 0); draw_modern(false, true, pct); }
++    else if (s == STY_MOON) { if (full) draw_moon(true, true, 0); draw_moon(false, true, pct); }
++    else { if (full) draw_ipod(true, s == STY_DARK, true, 0); draw_ipod(false, s == STY_DARK, true, pct); }
++}
+diff --git a/apps/asher/asher_usb.h b/apps/asher/asher_usb.h
+new file mode 100644
+index 0000000000..448b95e346
+--- /dev/null
++++ b/apps/asher/asher_usb.h
+@@ -0,0 +1,7 @@
++#ifndef ASHER_USB_H
++#define ASHER_USB_H
++#include <stdbool.h>
++bool asher_usbs_on(void);                 /* this theme draws its own USB screen */
++void asher_usbs_draw(bool full);          /* "connected": full, or just the moving part */
++void asher_usbs_eject(bool full, int pct);/* "OK to disconnect", pct 0..1000 */
 +#endif
 diff --git a/apps/asher/asher_wallpaper.c b/apps/asher/asher_wallpaper.c
 new file mode 100644
@@ -13001,10 +14697,10 @@ index 440164984b..5b11efd34a 100644
      {
          struct screen * screen = &(screens[i]);
 diff --git a/apps/gui/usb_screen.c b/apps/gui/usb_screen.c
-index b1a12d2d83..d12626fbe7 100644
+index b1a12d2d83..30e467e28e 100644
 --- a/apps/gui/usb_screen.c
 +++ b/apps/gui/usb_screen.c
-@@ -43,6 +43,98 @@
+@@ -43,6 +43,104 @@
  #include "icons.h"
  
  #include "bitmaps/usblogo.h"
@@ -13013,6 +14709,7 @@ index b1a12d2d83..d12626fbe7 100644
 +#include "bitmaps/usbstick.h"
 +#include "bitmaps/usbok.h"
 +#include "asher/asher_ui.h"
++#include "asher/asher_usb.h"
 +#include "storage.h"
 +#if (CONFIG_STORAGE & STORAGE_ATA)
 +#include "ata.h"
@@ -13064,6 +14761,11 @@ index b1a12d2d83..d12626fbe7 100644
 +
 +static void asher_usb_draw(bool full)
 +{
++    if (asher_usbs_on())
++    {
++        asher_usbs_draw(full);
++        return;
++    }
 +    if (m_modern())
 +    {
 +        lcd_set_viewport(NULL);
@@ -13103,7 +14805,7 @@ index b1a12d2d83..d12626fbe7 100644
  
  #ifdef HAVE_REMOTE_LCD
  #include "bitmaps/remote_usblogo.h"
-@@ -75,6 +167,94 @@ static void draw_usb_keypad_mode(struct viewport *title)
+@@ -75,6 +173,96 @@ static void draw_usb_keypad_mode(struct viewport *title)
  }
  #endif /* USB_ENABLE_HID */
  
@@ -13127,6 +14829,7 @@ index b1a12d2d83..d12626fbe7 100644
 +
 +static void ej_bar(void)
 +{
++    if (asher_usbs_on()) { asher_usbs_eject(false, ej_pct); return; }
 +    lcd_set_viewport(NULL);
 +    lcd_set_drawmode(DRMODE_SOLID);
 +    if (m_modern())
@@ -13157,6 +14860,7 @@ index b1a12d2d83..d12626fbe7 100644
 +    if (ej_on) return;
 +    ej_on = true;
 +    ej_pct = 0;
++    if (asher_usbs_on()) { asher_usbs_eject(true, 0); return; }
 +    lcd_set_viewport(NULL);
 +    lcd_set_drawmode(DRMODE_SOLID);
 +    if (m_modern())
@@ -13198,7 +14902,7 @@ index b1a12d2d83..d12626fbe7 100644
  static void handle_usb_events(struct viewport *title)
  {
  #if (CONFIG_STORAGE & STORAGE_MMC) && !defined(SIMULATOR)
-@@ -83,8 +263,40 @@ static void handle_usb_events(struct viewport *title)
+@@ -83,8 +271,40 @@ static void handle_usb_events(struct viewport *title)
      int button;
  
      /* Don't return until we get SYS_USB_DISCONNECTED */
@@ -13239,7 +14943,7 @@ index b1a12d2d83..d12626fbe7 100644
  #ifndef USB_ENABLE_HID
          (void)title;
  #else
-@@ -99,8 +311,12 @@ static void handle_usb_events(struct viewport *title)
+@@ -99,8 +319,12 @@ static void handle_usb_events(struct viewport *title)
  #endif
          {
              /* hid emits the event in get_action */
@@ -13252,7 +14956,7 @@ index b1a12d2d83..d12626fbe7 100644
          }
          if (button == SYS_USB_DISCONNECTED)
              return;
-@@ -140,7 +356,8 @@ static void usb_screen_fix_viewports(struct screen *screen,
+@@ -140,7 +364,8 @@ static void usb_screen_fix_viewports(struct screen *screen,
          logo_height = BMPHEIGHT_usblogo;
      }
  
@@ -13262,7 +14966,7 @@ index b1a12d2d83..d12626fbe7 100644
  
      if (logo_width  > parent->width)
          logo_width  = parent->width;
-@@ -204,6 +421,12 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
+@@ -204,6 +429,12 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
          &bm_remote_usblogo,
  #endif
      };
@@ -13275,7 +14979,7 @@ index b1a12d2d83..d12626fbe7 100644
      FOR_NB_SCREENS(i)
      {
          struct screen *screen = &screens[i];
-@@ -224,6 +447,21 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
+@@ -224,6 +455,21 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
  #endif
  }
  
@@ -13285,7 +14989,7 @@ index b1a12d2d83..d12626fbe7 100644
 +void gui_usb_screen_preview(void)
 +{
 +#ifdef ASHER_USB
-+    if (aui_theme()->modern)
++    if (aui_theme()->modern && !asher_usbs_on())
 +    {
 +        m_anim_load(&m_usb, "/.rockbox/asher/ui/m_usb.awp");
 +        m_anim_load(&m_txt, "/.rockbox/asher/ui/m_usbtxt.awp");
@@ -13297,7 +15001,7 @@ index b1a12d2d83..d12626fbe7 100644
  void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
  {
  #ifdef SIMULATOR /* the sim allows toggling USB fast enough to overflow viewportmanagers stack */
-@@ -244,6 +482,12 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+@@ -244,6 +490,12 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
  #endif
  
      push_current_activity(ACTIVITY_USBSCREEN);
@@ -13310,7 +15014,7 @@ index b1a12d2d83..d12626fbe7 100644
  
  #ifdef USB_ENABLE_HID
      usb_keypad_mode = global_settings.usb_keypad_mode;
-@@ -275,7 +519,24 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+@@ -275,7 +527,24 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
          /* The font system leaves the .fnt fd's open, so we need for force close them all */
          font_disable_all();
      }
@@ -13335,7 +15039,7 @@ index b1a12d2d83..d12626fbe7 100644
      usb_screens_draw(usb_screen_vps_ar);
      handle_usb_events(title);
  
-@@ -293,14 +554,56 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+@@ -293,14 +562,56 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
      touchscreen_set_mode(old_mode);
  #endif
  
