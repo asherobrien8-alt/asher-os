@@ -620,10 +620,10 @@ index 0000000000..541fe549c4
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
 new file mode 100644
-index 0000000000..4c66d03970
+index 0000000000..167d9ac4e0
 --- /dev/null
 +++ b/apps/asher/asher_home.c
-@@ -0,0 +1,438 @@
+@@ -0,0 +1,447 @@
 +/* Asher OS home screen.
 + *  Bubbles / Dark: four glossy bubbles in an even 2x2 grid over the live
 + *  wallpaper. Turning right moves right, then wraps down to the first box
@@ -771,8 +771,8 @@ index 0000000000..4c66d03970
 +        if (bat > 0)
 +        {
 +            int f = (bat * 62 + 50) / 100;
-+            aui_round(bx + 5, by + 5, MAX(f, 6), 26, 3, aui_batt_rgb(bat), aui_batt_rgb(bat));
-+            aui_shade(bx + 5, by + 5, MAX(f, 6), 10, 0, 150, 0xffffff);
++            unsigned bc = aui_batt_rgb_ipod(bat);
++            aui_round(bx + 5, by + 5, MAX(f, 6), 26, 3, aui_batt_shine(bc), bc);
 +        }
 +    }
 +    /* a soft shadow where the pane meets the list */
@@ -808,7 +808,7 @@ index 0000000000..4c66d03970
 +        struct mp3entry *id3 = audio_current_track();
 +        if ((audio_status() & AUDIO_STATUS_PLAY) && id3)
 +        {
-+            const char *tt = (id3->title && id3->title[0]) ? id3->title : "";
++            const char *tt = aui_song_title(id3);
 +            const char *ar = (id3->artist && id3->artist[0]) ? id3->artist : "";
 +            int yy = AUI_H - 40;
 +            aui_text(AF_SMALL, 10, yy, dk ? 0xffffff : 0x000000, tt, pane - 16, 0);
@@ -928,7 +928,7 @@ index 0000000000..4c66d03970
 +    {
 +        int tx = ax + as + 12, tw = WX + WW - 14 - tx;
 +        aui_text(AF_SMALL, tx, ay, paused ? 0xff9500 : 0xfa2346, paused ? "PAUSED" : "NOW PLAYING", tw, 0);
-+        aui_text(AF_MED, tx, ay + 17, 0x1c1c1e, (id3->title && id3->title[0]) ? id3->title : "Unknown", tw, 0);
++        aui_marquee(AF_MED, tx, ay + 17, 0x1c1c1e, aui_song_title(id3), tw);
 +        aui_text(AF_SMALLR, tx, ay + 36, 0x6e6e73, (id3->artist && id3->artist[0]) ? id3->artist : "", tw, 0);
 +    }
 +    else
@@ -987,6 +987,7 @@ index 0000000000..4c66d03970
 +int asher_home(const struct menu_item_ex *root, int *selected)
 +{
 +    int frame = -1, minute = -1;
++    long next_sec = 0;
 +    bool redraw = true;
 +    struct amedia media = { 0 };
 +    (void)root; (void)selected;
@@ -1012,14 +1013,22 @@ index 0000000000..4c66d03970
 +        if (aui_screen_on())
 +        {
 +            int f = asher_wp_frame_no(), m = get_time()->tm_min;
-+            if (redraw || (anim && f != frame) || m != minute)
++            /* 2.7: Modern's song widget keeps up with the song */
++            bool tick = asher_layout == 3 && (audio_status() & AUDIO_STATUS_PLAY)
++                        && !(audio_status() & AUDIO_STATUS_PAUSE)
++                        && TIME_AFTER(current_tick, next_sec);
++            if (redraw || (anim && f != frame) || m != minute || tick)
 +            {
 +                draw(home_sel);
 +                frame = f; minute = m;
++                next_sec = current_tick + asher_ticks_to_next_second();
 +                redraw = false;
 +            }
 +        }
-+        int action = home_action(!aui_screen_on() ? 2 * HZ : (anim ? asher_wp_frame_ticks() : HZ));
++        int tmo = anim ? asher_wp_frame_ticks() : HZ;
++        if (asher_layout == 3 && (audio_status() & AUDIO_STATUS_PLAY))
++            tmo = MIN(tmo, MAX(1, next_sec - current_tick));
++        int action = home_action(!aui_screen_on() ? 2 * HZ : tmo);
 +        if (asher_media(&media, action)) continue;
 +        switch (action)
 +        {
@@ -1076,10 +1085,10 @@ index 0000000000..0f36b5cbaa
 +#endif
 diff --git a/apps/asher/asher_list.c b/apps/asher/asher_list.c
 new file mode 100644
-index 0000000000..a065ea519d
+index 0000000000..d9d212c9eb
 --- /dev/null
 +++ b/apps/asher/asher_list.c
-@@ -0,0 +1,480 @@
+@@ -0,0 +1,481 @@
 +/* Asher OS list screen: thick rounded selection bar, top bar with the
 + * clock, and accelerated scrolling with a first-letter bubble. */
 +#include <stdio.h>
@@ -1143,7 +1152,7 @@ index 0000000000..a065ea519d
 +    {
 +        case STY_ORIG: case STY_DARK: return l->two_line ? 40 : 30;
 +        case STY_MODERN:              return l->two_line ? 42 : 35;
-+        case STY_MOON:                return l->two_line ? 40 : 28;
++        case STY_MOON:                return l->two_line ? 40 : 30;
 +        default:                      return l->two_line ? 42 : 35;
 +    }
 +}
@@ -1444,8 +1453,9 @@ index 0000000000..a065ea519d
 +    buf[0] = '\0';
 +    l->get(l, l->sel, buf, sizeof(buf), NULL, 0);
 +    const char *p = buf;
++    while (*p && strchr(" .-_([{'\"#*+~!", *p)) p++;
 +    if (!strncasecmp(p, "the ", 4)) p += 4;
-+    int c = toupper((unsigned char)*p);
++    int c = *p == '$' ? 'S' : toupper((unsigned char)*p);
 +    if (c >= 'A' && c <= 'Z') return c;
 +    return 0;            /* numbers and symbols: no bubble (no "#") */
 +}
@@ -2175,10 +2185,10 @@ index 0000000000..602c7f6ed6
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000000..55efd7dc48
+index 0000000000..3c0635f51c
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,2618 @@
+@@ -0,0 +1,2640 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -2264,9 +2274,22 @@ index 0000000000..55efd7dc48
 +{
 +    return strncasecmp(s, "the ", 4) ? s : s + 4;
 +}
++/* 2.7: what a title sorts by: no leading dots, dashes or brackets, no
++ * "The", and "$" counts as an S ("$uicideboy$" files under S) */
++static const char *sort_key(const char *s, char *buf, size_t n)
++{
++    while (*s && strchr(" .-_([{'\"#*+~!", *s)) s++;
++    s = skip_the(s);
++    size_t i = 0;
++    for (; *s && i + 1 < n; s++) buf[i++] = *s == '$' ? 's' : *s;
++    buf[i] = '\0';
++    return buf;
++}
 +static int cmp_title(const void *a, const void *b)
 +{
-+    int r = strnatcasecmp(skip_the(T(*(const int *)a)), skip_the(T(*(const int *)b)));
++    char x[128], y[128];
++    int r = strnatcasecmp(sort_key(T(*(const int *)a), x, sizeof(x)),
++                          sort_key(T(*(const int *)b), y, sizeof(y)));
 +    return r ? r : strnatcasecmp(AR(*(const int *)a), AR(*(const int *)b));
 +}
 +static int cmp_artist(const void *a, const void *b)
@@ -2601,7 +2624,7 @@ index 0000000000..55efd7dc48
 +
 +static void lib_cache_save(void)
 +{
-+    struct lib_hdr h = { { 'A', 'L', 'B', '4' }, lib_n, lib_u, lib_nart, lib_dbcount,
++    struct lib_hdr h = { { 'A', 'L', 'B', '5' }, lib_n, lib_u, lib_nart, lib_dbcount,
 +                         pool_used, pool_cap, lib_size, db_size() };
 +    int fd = open(LIB_CACHE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 +    if (fd < 0) return;
@@ -2616,7 +2639,7 @@ index 0000000000..55efd7dc48
 +    struct lib_hdr h;
 +    int fd = open(LIB_CACHE, O_RDONLY);
 +    if (fd < 0) return false;
-+    if (read(fd, &h, sizeof(h)) != sizeof(h) || memcmp(h.magic, "ALB4", 4)
++    if (read(fd, &h, sizeof(h)) != sizeof(h) || memcmp(h.magic, "ALB5", 4)
 +        || h.dbcount != dbcount || h.dbsize != db_size() || h.n <= 0)
 +        { close(fd); return false; }
 +    lib_free();
@@ -2666,6 +2689,11 @@ index 0000000000..55efd7dc48
 +            strlcpy(tb, b ? b + 1 : fname, sizeof(tb));
 +            char *dot = strrchr(tb, '.');
 +            if (dot && dot != tb) *dot = '\0';
++        }
++        {
++            /* 2.7: no track numbers in front of names, so A to Z works */
++            const char *c = aui_skip_tracknum(tb);
++            if (c != tb) memmove(tb, c, strlen(c) + 1);
 +        }
 +        if (!tagcache_retrieve(&tcs, idx, tag_artist, ab, sizeof(ab)) || !ab[0]
 +            || !strcmp(ab, UNTAGGED))
@@ -3783,6 +3811,8 @@ index 0000000000..55efd7dc48
 +    strlcpy(buf, b ? b + 1 : path, n);
 +    char *dot = strrchr(buf, '.');
 +    if (dot && dot != buf) *dot = '\0';
++    const char *c = aui_skip_tracknum(buf);
++    if (c != buf) memmove(buf, c, strlen(c) + 1);
 +}
 +static const char *fse_artist(const struct fse *e) { return e->ent >= 0 ? AR(e->ent) : ""; }
 +static void fs_title(int i, char *buf, size_t n) { fse_title(&fs_e[i], buf, n); }
@@ -3790,11 +3820,11 @@ index 0000000000..55efd7dc48
 +
 +static int fs_cmp_title(const void *a, const void *b)
 +{
-+    char x[128], y[128];
++    char x[128], y[128], kx[128], ky[128];
 +    fse_title(a, x, sizeof(x));
 +    fse_title(b, y, sizeof(y));
 +    /* "9" before "10", "159" before "160" (natural number order) */
-+    int r = strnatcasecmp(skip_the(x), skip_the(y));
++    int r = strnatcasecmp(sort_key(x, kx, sizeof(kx)), sort_key(y, ky, sizeof(ky)));
 +    return r ? r : strnatcasecmp(fse_artist(a), fse_artist(b));
 +}
 +static int fs_cmp_artist(const void *a, const void *b)
@@ -4558,8 +4588,8 @@ index 0000000000..55efd7dc48
 +        if (e >= 0) snprintf(buf, n, "%s - %s", T(e), AR(e));
 +        else if (nx && nx->title && nx->title[0] && !strcmp(nx->path, info.filename))
 +        {
-+            if (nx->artist && nx->artist[0]) snprintf(buf, n, "%s - %s", nx->title, nx->artist);
-+            else strlcpy(buf, nx->title, n);
++            if (nx->artist && nx->artist[0]) snprintf(buf, n, "%s - %s", aui_skip_tracknum(nx->title), nx->artist);
++            else strlcpy(buf, aui_skip_tracknum(nx->title), n);
 +        }
 +        else
 +        {
@@ -4567,6 +4597,8 @@ index 0000000000..55efd7dc48
 +            strlcpy(buf, b ? b + 1 : info.filename, n);
 +            char *dot = strrchr(buf, '.');
 +            if (dot && dot != buf) *dot = '\0';
++            const char *c = aui_skip_tracknum(buf);
++            if (c != buf) memmove(buf, c, strlen(c) + 1);
 +        }
 +    }
 +    else return false;
@@ -4823,10 +4855,10 @@ index 0000000000..5835081571
 +#endif
 diff --git a/apps/asher/asher_nowplaying.c b/apps/asher/asher_nowplaying.c
 new file mode 100644
-index 0000000000..0700e7ed75
+index 0000000000..e2810d2ced
 --- /dev/null
 +++ b/apps/asher/asher_nowplaying.c
-@@ -0,0 +1,752 @@
+@@ -0,0 +1,722 @@
 +/* Asher OS Now Playing: album art, song + artist, play/pause status,
 + * kbps, elapsed / total time. The background is the album art blown up
 + * and blurred (or a soft colour blend when a song has no art). */
@@ -5005,29 +5037,9 @@ index 0000000000..0700e7ed75
 +/* ------------------------------------------------------------------ */
 +static const char *track_title(struct mp3entry *id3)
 +{
-+    if (id3->title && id3->title[0]) return id3->title;
-+    const char *p = strrchr(id3->path, '/');
-+    return p ? p + 1 : id3->path;
++    return aui_song_title(id3);
 +}
 +
-+/* split s so the first line fits in w (break at a space when possible) */
-+static void wrap2(const char *s, int font, int w, char *l1, char *l2, size_t n)
-+{
-+    size_t len = strlen(s), best = 0;
-+    l1[0] = l2[0] = '\0';
-+    if (aui_text_w(font, s) <= w) { strlcpy(l1, s, n); return; }
-+    for (size_t i = 1; i <= len && i < n; i++)
-+    {
-+        if (s[i] != ' ' && s[i] != '\0') continue;
-+        char tmp[160];
-+        strlcpy(tmp, s, MIN(i + 1, sizeof(tmp)));
-+        if (aui_text_w(font, tmp) <= w) best = i; else break;
-+    }
-+    if (!best) { strlcpy(l1, s, n); return; }   /* one long word: truncate */
-+    strlcpy(l1, s, MIN(best + 1, n));
-+    while (s[best] == ' ') best++;
-+    strlcpy(l2, s + best, n);
-+}
 +
 +/* ------------------------------------------------------------------ */
 +/* what every look needs to know                                       */
@@ -5084,7 +5096,7 @@ index 0000000000..0700e7ed75
 +    np_info(m, &n);
 +    const int AX = 14, AY = AUI_BAR + 10, AS = 118, TX = AX + AS + 12, TW = AUI_W - TX - 10;
 +    unsigned bg_t = dk ? 0x1a1b1f : 0xffffff, bg_b = dk ? 0x000000 : 0xe6e8ec;
-+    char l1[160], l2[160], buf[48];
++    char buf[48];
 +
 +    aui_vgrad(0, 0, AUI_W, AUI_H, bg_t, bg_b);
 +    aui_topbar();
@@ -5132,15 +5144,12 @@ index 0000000000..0700e7ed75
 +            snprintf(buf, sizeof(buf), "%d of %d", playlist_get_display_index(), cnt);
 +            aui_text(AF_SMALLR, TX, AY - 2, gc, buf, TW, 0);
 +        }
-+        wrap2(track_title(n.id3), AF_BIG, TW, l1, l2, sizeof(l1));
 +        int y = AY + 16;
-+        aui_text(AF_BIG, TX, y, tc, l1, TW, 0);
-+        y += aui_font_h(AF_BIG);
-+        if (l2[0]) { aui_text(AF_BIG, TX, y, tc, l2, TW, 0); y += aui_font_h(AF_BIG); }
-+        y += 4;
-+        aui_text(AF_MED, TX, y, sc, np_artist(n.id3), TW, 0);
++        aui_marquee(AF_BIG, TX, y, tc, track_title(n.id3), TW);
++        y += aui_font_h(AF_BIG) + 4;
++        aui_marquee(AF_MED, TX, y, sc, np_artist(n.id3), TW);
 +        y += aui_font_h(AF_MED) + 1;
-+        aui_text(AF_SMALLR, TX, y, gc, np_album(n.id3), TW, 0);
++        aui_marquee(AF_SMALLR, TX, y, gc, np_album(n.id3), TW);
 +        /* bottom of the column: shuffle, then what's next */
 +        char nx[120], line[140];
 +        bool q = false;
@@ -5195,7 +5204,7 @@ index 0000000000..0700e7ed75
 +    struct npi n;
 +    np_info(m, &n);
 +    const int AX = 18, AY = AUI_BAR + 8, AS = 108, TX = AX + AS + 14, TW = AUI_W - TX - 16;
-+    char l1[160], l2[160], buf[48];
++    char buf[48];
 +
 +    np_background(n.playing ? n.id3 : NULL, 1);
 +    memcpy(aui_fb, np_bg, sizeof(np_bg));
@@ -5244,15 +5253,13 @@ index 0000000000..0700e7ed75
 +    unsigned tc = 0xffffff, sc = 0xd9d9de, gc = 0xa9a9b2;
 +    if (n.playing)
 +    {
-+        wrap2(track_title(n.id3), AF_BIG, TW, l1, l2, sizeof(l1));
++        /* one line each, sliding when long, so nothing runs into "Up next" */
 +        int y = AY + 4;
-+        aui_text(AF_BIG, TX, y, tc, l1, TW, 0);
-+        y += aui_font_h(AF_BIG);
-+        if (l2[0]) { aui_text(AF_BIG, TX, y, tc, l2, TW, 0); y += aui_font_h(AF_BIG); }
-+        y += 2;
-+        aui_text(AF_MED, TX, y, sc, np_artist(n.id3), TW, 0);
++        aui_marquee(AF_BIG, TX, y, tc, track_title(n.id3), TW);
++        y += aui_font_h(AF_BIG) + 2;
++        aui_marquee(AF_MED, TX, y, sc, np_artist(n.id3), TW);
 +        y += aui_font_h(AF_MED) + 1;
-+        aui_text(AF_SMALLR, TX, y, gc, np_album(n.id3), TW, 0);
++        aui_marquee(AF_SMALLR, TX, y, gc, np_album(n.id3), TW);
 +        char nx[120], line[140];
 +        bool qd = false;
 +        if (show_shuf)
@@ -5299,7 +5306,7 @@ index 0000000000..0700e7ed75
 +    np_info(m, &n);
 +    const int AX = 14, AY = AUI_BAR + 10, AS = 112, TX = AX + AS + 12, TW = AUI_W - TX - 10;
 +    const int LY = MP_FOOT_Y - 4;
-+    char l1[160], l2[160], buf[64];
++    char buf[64];
 +
 +    aui_night_sky(0, AUI_H);
 +    aui_topbar();
@@ -5327,13 +5334,10 @@ index 0000000000..0700e7ed75
 +    if (n.playing)
 +    {
 +        int y = AY - 2;
-+        aui_text(AF_SMALLR, TX, y, mid, np_album(n.id3), TW, 0);   y += 14;
-+        aui_text(AF_SMALLR, TX, y, mid, np_artist(n.id3), TW, 0);  y += 16;
-+        wrap2(track_title(n.id3), AF_BIG, TW, l1, l2, sizeof(l1));
-+        aui_text(AF_BIG, TX, y, fg, l1, TW, 0);
-+        y += aui_font_h(AF_BIG);
-+        if (l2[0]) { aui_text(AF_BIG, TX, y, fg, l2, TW, 0); y += aui_font_h(AF_BIG); }
-+        y += 2;
++        aui_marquee(AF_SMALLR, TX, y, mid, np_album(n.id3), TW);   y += aui_font_h(AF_SMALLR) + 2;
++        aui_marquee(AF_SMALLR, TX, y, mid, np_artist(n.id3), TW);  y += aui_font_h(AF_SMALLR) + 4;
++        aui_marquee(AF_BIG, TX, y, fg, track_title(n.id3), TW);
++        y += aui_font_h(AF_BIG) + 2;
 +        if (n.id3->year) { snprintf(buf, sizeof(buf), "Year: %d", n.id3->year); aui_text(AF_SMALLR, TX, y, mid, buf, TW, 0); y += 14; }
 +        if (n.id3->frequency)
 +        {
@@ -5396,7 +5400,7 @@ index 0000000000..0700e7ed75
 +    bool playing = (st & AUDIO_STATUS_PLAY) && id3;
 +    bool paused = st & AUDIO_STATUS_PAUSE;
 +    bool show_vol = asher_media_show_vol(m);
-+    char l1[160], l2[160], buf[48], b2[16];
++    char buf[48], b2[16];
 +    long pos = playing ? (m->seeking ? m->seek_pos : (long)id3->elapsed) : 0;
 +    long len = playing ? (long)id3->length : 0;
 +
@@ -5432,12 +5436,10 @@ index 0000000000..0700e7ed75
 +    {
 +        aui_text(AF_SMALL, COL_X, ART_Y + 2, paused ? 0xffb347 : 0x5ee38a,
 +                 paused ? "Currently Paused" : "Currently Playing", COL_W, 0);
-+        wrap2(track_title(id3), AF_BIG, COL_W, l1, l2, sizeof(l1));
-+        aui_text(AF_BIG, COL_X, ART_Y + 22, tc, l1, COL_W, 0);
++        aui_marquee(AF_BIG, COL_X, ART_Y + 22, tc, track_title(id3), COL_W);
 +        int y = ART_Y + 44;
-+        if (l2[0]) { aui_text(AF_BIG, COL_X, y, tc, l2, COL_W, 0); y += 22; }
-+        aui_text(AF_MED, COL_X, y + 4,
-+                 sc, (id3->artist && id3->artist[0]) ? id3->artist : "Unknown Artist", COL_W, 0);
++        aui_marquee(AF_MED, COL_X, y + 4,
++                 sc, (id3->artist && id3->artist[0]) ? id3->artist : "Unknown Artist", COL_W);
 +        {
 +            /* the song after this one (was the kbps line) */
 +            char nx[120], line[140];
@@ -6091,7 +6093,7 @@ index 0000000000..8ff3b022d0
 +#endif
 diff --git a/apps/asher/asher_quick.c b/apps/asher/asher_quick.c
 new file mode 100644
-index 0000000000..432b55828a
+index 0000000000..7f86444030
 --- /dev/null
 +++ b/apps/asher/asher_quick.c
 @@ -0,0 +1,422 @@
@@ -6294,7 +6296,7 @@ index 0000000000..432b55828a
 +    }
 +    if (playing)
 +    {
-+        const char *title = (id3->title && id3->title[0]) ? id3->title : strrchr(id3->path, '/') + 1;
++        const char *title = aui_song_title(id3);
 +        aui_text(AF_BIG, x + 14, y + 26, fg, title, w - 28, 0);
 +        aui_text(AF_SMALLR, x + 14, y + 50, sub,
 +                 (id3->artist && id3->artist[0]) ? id3->artist : "Unknown Artist", w - 28, 0);
@@ -7145,10 +7147,10 @@ index 0000000000..5349121a88
 +#endif
 diff --git a/apps/asher/asher_stats.c b/apps/asher/asher_stats.c
 new file mode 100644
-index 0000000000..9788949e04
+index 0000000000..09e004313b
 --- /dev/null
 +++ b/apps/asher/asher_stats.c
-@@ -0,0 +1,539 @@
+@@ -0,0 +1,540 @@
 +/* Asher OS Stats screen, laid out as retro desktop windows:
 + * album_art.jpg, wallpaper.gif (live), now_playing.txt and moon.jpeg. */
 +#include <stdio.h>
@@ -7217,9 +7219,7 @@ index 0000000000..9788949e04
 +
 +static const char *track_title(struct mp3entry *id3)
 +{
-+    if (id3->title && id3->title[0]) return id3->title;
-+    const char *p = strrchr(id3->path, '/');
-+    return p ? p + 1 : id3->path;
++    return aui_song_title(id3);
 +}
 +
 +/* ------------------------------------------------------------------ */
@@ -7282,7 +7282,7 @@ index 0000000000..9788949e04
 +        aui_fill(x + 1, y + 1, 22, 10, bg);
 +        aui_fill(x + 24, y + 3, 2, 6, dk ? 0xc9ccd3 : 0x50555e);
 +        int f = (bat * 20 + 50) / 100;
-+        if (f > 0) aui_fill(x + 2, y + 2, f, 8, aui_batt_rgb(bat));
++        if (f > 0) aui_fill(x + 2, y + 2, f, 8, aui_batt_rgb_ipod(bat));
 +    }
 +    /* song progress under the song's name */
 +    if (playing || vol)
@@ -7304,7 +7304,10 @@ index 0000000000..9788949e04
 +    if (vol) snprintf(buf, sizeof(buf), "Volume %d%%", aui_volume_pct());
 +    else if (playing) snprintf(buf, sizeof(buf), "%s", track_title(id3));
 +    else strlcpy(buf, "Not playing", sizeof(buf));
-+    aui_text(AF_SMALLR, AUI_W - 12, ry + 2 * RH - 4, vc, buf, 180, 2);
++    if (aui_text_w(AF_SMALLR, buf) <= 180)
++        aui_text(AF_SMALLR, AUI_W - 12, ry + 2 * RH - 4, vc, buf, 180, 2);
++    else
++        aui_marquee(AF_SMALLR, AUI_W - 12 - 180, ry + 2 * RH - 4, vc, buf, 180);
 +    if (st) snprintf(buf, sizeof(buf), "%s GB", t1);
 +    aui_text(AF_SMALLR, AUI_W - 12, ry + 3 * RH, vc, st ? buf : "--", 150, 2);
 +    if (st) { strlcat(f1, " GB", sizeof(f1)); }
@@ -7391,7 +7394,7 @@ index 0000000000..9788949e04
 +             !playing ? "NOT PLAYING" : paused ? "PAUSED" : "PLAYING", tw, 0);
 +    if (playing)
 +    {
-+        aui_text(AF_SMALL, tx, ay + 16, tc, track_title(id3), tw, 0);
++        aui_marquee(AF_SMALL, tx, ay + 16, tc, track_title(id3), tw);
 +        aui_text(AF_SMALLR, tx, ay + 32, sc, np_artist(id3), tw, 0);
 +    }
 +    else
@@ -7595,7 +7598,7 @@ index 0000000000..9788949e04
 +        }
 +        snprintf(buf, sizeof(buf), "%s - %s", track_title(id3),
 +                 (id3->artist && id3->artist[0]) ? id3->artist : "Unknown Artist");
-+        aui_text(AF_SMALL, INFO_X + 5, INFO_Y + 28, C_TEXT, buf, 188, 0);
++        aui_marquee(AF_SMALL, INFO_X + 5, INFO_Y + 28, C_TEXT, buf, 188);
 +        if (vol)
 +            snprintf(buf, sizeof(buf), "vol %d%%", aui_volume_pct());
 +        else
@@ -8149,10 +8152,10 @@ index 0000000000..728fa524c6
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..f18652dea8
+index 0000000000..037f120611
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,1601 @@
+@@ -0,0 +1,1783 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -8187,6 +8190,8 @@ index 0000000000..f18652dea8
 +#include "moonphase.h"
 +#include "asher_prefs.h"
 +#include "metadata.h"
++#include "pcm.h"
++#include "pcm_mixer.h"
 +#include "thread.h"
 +/* 2.6.1 loading keeper (see below) */
 +static volatile bool ldr_live, ldr_in_draw;
@@ -8637,8 +8642,10 @@ index 0000000000..f18652dea8
 +    { "20-Inter-SemiBold", "15-Inter-SemiBold", "13-Inter-SemiBold",
 +      "13-Inter-Regular", "20-Asher-Retro", "10-Asher-Retro", "26-InterDisplay-Bold" },
 +    /* MoonPod: pixel lettering */
-+    { "22-Pixelify-Regular", "16-Pixelify-Regular", "11-Pixelify-Regular",
-+      "11-Pixelify-Regular", "20-Asher-Retro", "10-Asher-Retro", "21-Jacquard12" },
++    /* 2.7.1: crisp pixel lettering (no soft edges) with a little air
++     * between letters, big enough to read at a glance */
++    { "22-PixelifyCrisp", "18-PixelifyCrisp", "14-PixelifyCrisp",
++      "14-PixelifyCrisp", "20-Asher-Retro", "10-Asher-Retro", "21-Jacquard12" },
 +};
 +static int fonts[AF_COUNT] = { -1, -1, -1, -1, -1, -1, -1 };
 +static const char *font_loaded[AF_COUNT];
@@ -8989,13 +8996,17 @@ index 0000000000..f18652dea8
 +    if (ldr_boosted) { ldr_boosted = false; cpu_boost(false); }
 +}
 +
++static bool aui_live_active(void);
++static void aui_live_tick(void);
 +static void keeper_thread(void)
 +{
 +    while (1)
 +    {
 +        /* quick while something loads, otherwise a calm 10 times a second
 +         * (just enough for the hold switch to feel instant) */
-+        sleep(ldr_live ? HZ / 25 : HZ / 10);
++        bool live = !ldr_live && aui_live_active();
++        sleep(ldr_live ? HZ / 25 : live ? HZ / 20 : HZ / 10);
++        if (live && !ldr_in_draw) aui_live_tick();
 +        if (in_boosted && TIME_AFTER(current_tick, in_until))
 +            { in_boosted = false; cpu_boost(false); }
 +#ifdef HAS_BUTTON_HOLD
@@ -9211,6 +9222,19 @@ index 0000000000..f18652dea8
 +    return 0xbf1d38;                     /* deep red */
 +}
 +
++/* Original / Dark: a cooler green that reads as green for red-green
++ * colour blindness too (with the iPod's shine on top) */
++unsigned aui_batt_rgb_ipod(int pct)
++{
++    return pct >= 66 ? 0x14d96a : aui_batt_rgb(pct);
++}
++unsigned aui_batt_shine(unsigned c)
++{
++    unsigned r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
++    r += (255 - r) / 3; g += (255 - g) / 3; b += (255 - b) / 3;
++    return (r << 16) | (g << 8) | b;
++}
++
 +/* the charging bolt, like a phone's: white with a dark edge */
 +#define BOLT_H 8
 +static const char *const bolt_rows[BOLT_H] = {
@@ -9238,6 +9262,46 @@ index 0000000000..f18652dea8
 +    for (int r = 0; r < BOLT_H; r++)
 +        for (int c = 0; c < 7; c++)
 +            if (bolt_rows[r][c] == '#') rect(x + c, y + r, 1, 1, 0xffffff);
++}
++
++/* 2.7: "01 - Song" / "01. Song" / "05 Song" -> "Song" (track numbers that
++ * ended up in a file's name or title tag; "21 Savage" or "40 Oz." stay) */
++const char *aui_skip_tracknum(const char *s)
++{
++    const char *p = s;
++    while (*p == ' ') p++;
++    const char *d = p;
++    int nd = 0;
++    while (*p >= '0' && *p <= '9' && nd < 4) { p++; nd++; }
++    if (nd == 0 || nd > 3) return s;
++    if (*p == '-' && p[1] >= '0' && p[1] <= '9')        /* disc-track "1-05" */
++    {
++        p++;
++        while (*p >= '0' && *p <= '9') p++;
++    }
++    const char *q = p;
++    while (*q == ' ') q++;
++    bool sep = false;
++    if (*q == '-' || *q == '.' || *q == '_' || *q == ')') { q++; sep = true; }
++    if (sep && *(q - 1) == '.' && *q != ' ') return s;     /* "4.5 Stars" */
++    while (*q == ' ' || *q == '_') q++;
++    if (!*q) return s;
++    if (sep) return q;
++    /* no separator: only a zero-padded number like "05 Song" */
++    if (d[0] == '0' && nd >= 2 && q > p) return q;
++    return s;
++}
++
++const char *aui_song_title(const struct mp3entry *id3)
++{
++    static char buf[MAX_PATH];
++    if (!id3) return "";
++    if (id3->title && id3->title[0]) return aui_skip_tracknum(id3->title);
++    const char *b = strrchr(id3->path, '/');
++    strlcpy(buf, b ? b + 1 : id3->path, sizeof(buf));
++    char *dot = strrchr(buf, '.');
++    if (dot && dot != buf) *dot = '\0';
++    return aui_skip_tracknum(buf);
 +}
 +
 +/* a four-point twinkle */
@@ -9272,8 +9336,8 @@ index 0000000000..f18652dea8
 +    else for (int k = 0; k < 5; k++) lcd_vline(9 + k, gy + k * 7 / 10, gy + 6 - k * 7 / 10);
 +    snprintf(buf, sizeof(buf), "%s - %s",
 +             (id3->artist && id3->artist[0]) ? id3->artist : "Unknown",
-+             (id3->title && id3->title[0]) ? id3->title : "Unknown");
-+    aui_text(AF_SMALLR, 22, y, MP_FG, buf, AUI_W - 80, 0);
++             aui_song_title(id3));
++    aui_marquee(AF_SMALLR, 22, y, MP_FG, buf, AUI_W - 80);
 +}
 +
 +/* ---- little pixel pictures drawn from text rows ('#' = colour) ---- */
@@ -9368,12 +9432,13 @@ index 0000000000..f18652dea8
 +    if (pct >= 0)
 +    {
 +        int f = (pct * 20 + 50) / 100;
-+        unsigned c = aui_batt_rgb(pct);
++        unsigned c = aui_batt_rgb_ipod(pct);
 +        if (f > 0)
 +        {
-+            aui_vgrad(x + 2, y + 2, f, 8, c, c);
-+            aui_shade(x + 2, y + 2, f, 3, 0, 150, 0xffffff);   /* gloss */
-+            aui_shade(x + 2, y + 7, f, 3, 0, 200, 0x000000);
++            /* a soft shine made of the same green, never white (white
++             * over green read as orange) */
++            aui_fill(x + 2, y + 2, f, 8, c);
++            aui_vgrad(x + 2, y + 2, f, 3, aui_batt_shine(c), c);
 +        }
 +    }
 +    if (bar_charging()) aui_bolt(aui_fill, x + 8, y + 2);
@@ -9396,6 +9461,133 @@ index 0000000000..f18652dea8
 +        if (f > 0) aui_round(x + 2, y + 2, MAX(f, 4), 9, 2, c, c);
 +    }
 +    if (chg) aui_bolt(aui_fill, x + 9, y + 2);
++}
++
++/* ---- 2.7: things that move between full redraws ------------------- */
++static bool bar_drawn;            /* the frame being made has the Modern bar */
++static bool live_ok;              /* the screen up now is ours and has it */
++static int isl_x, isl_w;
++static bool isl_on;               /* music playing: the level bars are live */
++static int isl_lv[5];             /* bar heights, 0..256 */
++
++/* Modern's island: five level bars that follow the music */
++static void island_bars(bool advance)
++{
++    static const unsigned short shape[5] = { 150, 220, 256, 210, 160 };
++    int ps = bar_play_state();
++    if (advance || !isl_lv[2])
++    {
++        int lvl = 0;
++        if (ps == 1)
++        {
++            struct pcm_peaks pk = { 0, 0, 0, 0 };
++            mixer_channel_calculate_peaks(PCM_MIXER_CHAN_PLAYBACK, &pk);
++            int pkv = (int)MAX(pk.left, pk.right);            /* 0..32767 */
++            /* a rough loudness curve, so quiet parts still move */
++            lvl = pkv <= 0 ? 0 : MIN(256, isqrt_i(pkv * 2));   /* 0..256 */
++        }
++        unsigned seed = (unsigned)current_tick * 2654435761u;
++        for (int i = 0; i < 5; i++)
++        {
++            seed = seed * 1103515245u + 12345u;
++            int wob = 200 + (int)((seed >> 16) % 57);          /* 200..256 */
++            int target = lvl * shape[i] / 256 * wob / 256;
++            if (target > isl_lv[i]) isl_lv[i] = (isl_lv[i] + 3 * target) / 4;   /* quick up */
++            else isl_lv[i] = (3 * isl_lv[i] + target) / 4;                       /* slow down */
++        }
++    }
++    /* the inside of the pill, then the bars in the middle */
++    aui_round(isl_x, 4, isl_w, 22, 11, 0x000000, 0x000000);
++    int cx = isl_x + isl_w / 2, cy = 15;
++    for (int i = 0; i < 5; i++)
++    {
++        int h = ps == 1 ? 3 + isl_lv[i] * 13 / 256 : 3;
++        int x = cx - 12 + i * 5;
++        aui_round(x, cy - h / 2, 3, h, 1, 0x30d158, 0x30d158);
++    }
++}
++
++/* text too long for its box slides along, waits, and starts over */
++#define MQ_MAX 5
++struct mq { bool used, live; int font, x, y, w; unsigned rgb; long start; char s[160]; };
++static struct mq mqs[MQ_MAX];
++
++static int mq_offset(struct mq *m, int tw)
++{
++    const int pause = HZ * 3 / 2, speed = 28;              /* pixels a second */
++    int travel = tw - m->w;
++    long run = travel * HZ / speed;
++    long t = (current_tick - m->start) % (pause + run + pause);
++    if (t < pause) return 0;
++    if (t < pause + run) return (int)((t - pause) * speed / HZ);
++    return travel;
++}
++static void mq_draw(struct mq *m, bool update)
++{
++    int fid = aui_font(m->font), tw = 0, th = 0;
++    font_getstringsize((const unsigned char *)m->s, &tw, &th, fid);
++    int off = mq_offset(m, tw);
++    struct viewport *prev = lcd_set_viewport(NULL);
++    struct viewport *dflt = lcd_set_viewport(prev);
++    struct viewport vp = *dflt;
++    vp.x = m->x; vp.y = m->y; vp.width = m->w; vp.height = th;
++    vp.font = fid;
++    lcd_set_viewport(&vp);
++    lcd_set_drawmode(DRMODE_SOLID);
++    lcd_bitmap_part(aui_fb, m->x, m->y, AUI_W, 0, 0, m->w, th);
++    lcd_set_drawmode(DRMODE_FG);
++    lcd_set_foreground(LCD_RGBPACK((m->rgb >> 16) & 255, (m->rgb >> 8) & 255, m->rgb & 255));
++    lcd_putsxy(-off, 0, (const unsigned char *)m->s);
++    lcd_set_drawmode(DRMODE_SOLID);
++    lcd_set_viewport(NULL);
++    if (update) lcd_update_rect(m->x, m->y, m->w, th);
++}
++/* like aui_text (left aligned), but long text scrolls instead of "..." */
++void aui_marquee(int font, int x, int y, unsigned rgb, const char *s, int maxw)
++{
++    if (!s || !s[0]) return;
++    if (f3_of(font) >= 0 || aui_text_w(font, s) <= maxw || maxw <= 0)
++    {
++        aui_text(font, x, y, rgb, s, maxw, 0);
++        return;
++    }
++    struct mq *m = NULL;
++    for (int i = 0; i < MQ_MAX; i++)       /* the same text in the same spot keeps going */
++        if (mqs[i].used && mqs[i].x == x && mqs[i].y == y && mqs[i].font == font
++            && !strcmp(mqs[i].s, s)) { m = &mqs[i]; break; }
++    if (!m)
++    {
++        for (int i = 0; i < MQ_MAX && !m; i++) if (!mqs[i].used || !mqs[i].live) m = &mqs[i];
++        if (!m) { aui_text(font, x, y, rgb, s, maxw, 0); return; }
++        m->used = true; m->font = font; m->x = x; m->y = y;
++        strlcpy(m->s, s, sizeof(m->s));
++        m->start = current_tick;
++    }
++    m->w = maxw; m->rgb = rgb; m->live = true;
++    mq_draw(m, false);
++}
++
++/* called from the helper thread about 20 times a second */
++static bool aui_live_active(void)
++{
++    if (!live_ok || aui_depth <= 0 || !aui_screen_on()) return false;
++    if (isl_on && aui_style() == STY_MODERN) return true;
++    for (int i = 0; i < MQ_MAX; i++) if (mqs[i].used && mqs[i].live) return true;
++    return false;
++}
++static void aui_live_tick(void)
++{
++    if (!aui_live_active()) return;
++    if (isl_on && aui_style() == STY_MODERN)
++    {
++        island_bars(true);
++        lcd_set_viewport(NULL);
++        lcd_set_drawmode(DRMODE_SOLID);
++        lcd_bitmap_part(aui_fb, isl_x, 4, AUI_W, isl_x, 4, isl_w, 22);
++        lcd_update_rect(isl_x, 4, isl_w, 22);
++    }
++    for (int i = 0; i < MQ_MAX; i++)
++        if (mqs[i].used && mqs[i].live) mq_draw(&mqs[i], true);
 +}
 +
 +void aui_topbar(void)
@@ -9427,27 +9619,14 @@ index 0000000000..f18652dea8
 +    {
 +        /* frosted strip, no rule: it melts into the page */
 +        if (!aui_bar_dark) aui_shade(0, 0, AUI_W, AUI_BAR, 0, 70, 0xf7f7f9);
-+        /* the island */
++        /* the island: live level bars from the music, centred */
 +        int pw = (ps || hold || bar_charging()) ? 84 : 58, px0 = (AUI_W - pw) / 2;
 +        aui_round(px0, 4, pw, 22, 11, 0x000000, 0x000000);
-+        if (ps)
-+        {
-+            /* a small coloured tile for the song, and live level bars */
-+            aui_round(px0 + 6, 8, 14, 14, 4, t->accent, 0xff2d55);
-+            aui_fill(px0 + 11, 11, 2, 7, 0xffffff);
-+            aui_fill(px0 + 11, 11, 5, 2, 0xffffff);
-+            static const unsigned char lv[4][6] = {
-+                { 3, 7, 5, 9, 4, 8 }, { 8, 4, 9, 5, 7, 3 },
-+                { 5, 9, 3, 6, 9, 5 }, { 7, 3, 8, 4, 5, 9 } };
-+            int ph = (current_tick / (HZ / 5)) % 6;
-+            for (int i = 0; i < 4; i++)
-+            {
-+                int h = ps == 1 ? lv[i][(ph + i) % 6] + 1 : 2;
-+                aui_round(px0 + pw - 30 + i * 5, 15 - h / 2, 3, h, 1, 0x30d158, 0x30d158);
-+            }
-+        }
-+        if (hold) glyph_lock(px0 + pw / 2 - 4 + (ps ? 0 : 0), 9, ps ? 0xff9f0a : 0xffffff, 0x000000);
-+        else if (!ps && bar_charging())
++        isl_x = px0; isl_w = pw; isl_on = ps != 0 && !hold;
++        bar_drawn = true;
++        if (hold) glyph_lock(px0 + pw / 2 - 4, 9, 0xffffff, 0x000000);
++        else if (ps) island_bars(false);
++        else if (bar_charging())
 +            aui_bolt(aui_fill, px0 + pw / 2 - 3, 11);
 +        batt_phone(AUI_W - 38, 9, bat);
 +        return;
@@ -9458,7 +9637,7 @@ index 0000000000..f18652dea8
 +        aui_fill(0, 0, AUI_W, AUI_BAR, MP_BG);
 +        if (!aui_sprite(SPR_MP_LOGO, 6, 1))
 +            aui_moon_disc(8, 6, 16, MP_FG, MP_DIM);
-+        int bx = AUI_W - 30, by = 4;
++        int bx = AUI_W - 30, by = 3;
 +        aui_fill(bx, by, 20, 10, MP_FG);
 +        aui_fill(bx + 1, by + 1, 18, 8, MP_BG);
 +        aui_fill(bx + 20, by + 3, 2, 4, MP_FG);
@@ -9468,7 +9647,7 @@ index 0000000000..f18652dea8
 +            if (f > 0) aui_fill(bx + 2, by + 2, f, 6, aui_batt_rgb(bat));
 +        }
 +        if (bar_charging()) aui_bolt(aui_fill, bx + 6, by + 1);
-+        aui_fill(6, AUI_BAR - 2, AUI_W - 12, 1, MP_FG);
++        aui_fill(6, AUI_BAR - 1, AUI_W - 12, 1, MP_FG);
 +        (void)ps; (void)hold;
 +        return;
 +    }
@@ -9540,17 +9719,16 @@ index 0000000000..f18652dea8
 +    }
 +    if (sty == STY_MOON)
 +    {
-+        int fh = aui_font_h(AF_SMALLR);
 +        if (bat >= 0)
 +        {
 +            snprintf(buf, sizeof(buf), "%d%%", bat);
-+            aui_text(AF_SMALLR, AUI_W - 36, 4 + (10 - fh) / 2, MP_FG, buf, 40, 2);
++            aui_text(AF_SMALLR, AUI_W - 34, 1, MP_FG, buf, 44, 2);
 +        }
 +        if (bar_hold()) strlcpy(buf, "LOCKED", sizeof(buf));
 +        else aui_time_str(buf, sizeof(buf));
-+        aui_text(AF_SMALLR, AUI_W - 8, 15, MP_MID, buf, 80, 2);
++        aui_text(AF_SMALLR, AUI_W - 8, 14, MP_FG, buf, 90, 2);
 +        if (title && title[0] && strcmp(title, "Asher OS"))
-+            aui_text(AF_SMALLR, 186, 15, MP_MID, title, 90, 1);
++            aui_text(AF_SMALLR, 182, 14, MP_MID, title, 84, 1);
 +        (void)tm;
 +        return;
 +    }
@@ -9588,6 +9766,8 @@ index 0000000000..f18652dea8
 +void aui_end(void)
 +{
 +    loader_stop();
++    live_ok = false; isl_on = false;
++    for (int i = 0; i < MQ_MAX; i++) mqs[i].used = mqs[i].live = false;
 +    if (aui_depth > 0) aui_depth--;
 +    lcd_set_viewport(NULL);
 +    lcd_set_drawmode(DRMODE_SOLID);
@@ -9601,6 +9781,11 @@ index 0000000000..f18652dea8
 +void aui_present(void)
 +{
 +    loader_check();
++    /* a new frame: what moves is whatever this frame draws again */
++    live_ok = true;
++    if (!bar_drawn) isl_on = false;
++    bar_drawn = false;
++    for (int i = 0; i < MQ_MAX; i++) mqs[i].live = false;
 +    lcd_set_viewport(NULL);
 +    lcd_bitmap(aui_fb, 0, 0, AUI_W, AUI_H);
 +    asher_boot_release();     /* first screen after boot is up: bar allowed again */
@@ -9756,10 +9941,10 @@ index 0000000000..f18652dea8
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..0b48c98f04
+index 0000000000..adfa55fa6b
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,150 @@
 +/* Asher OS shared drawing layer.
 + * Screens are composed into an off-screen buffer (aui_fb): wallpaper,
 + * glass panels and alpha-blended sprites. The buffer is then copied to the
@@ -9817,6 +10002,9 @@ index 0000000000..0b48c98f04
 +#define MP_MID 0x8a82a6
 +#define MP_DIM 0x463d6b
 +void aui_sparkle(int x, int y, int r, unsigned rgb);
++struct mp3entry;
++const char *aui_skip_tracknum(const char *s);          /* "01 - Song" -> "Song" */
++const char *aui_song_title(const struct mp3entry *id3); /* clean title for showing */
 +#define MP_FOOT_Y 216                  /* where the moon sits */
 +void aui_mp_footer(int line_y, int mascot_x);  /* MoonPod: the line, the moon, sparkles */
 +void aui_mp_footer_text(void);                 /* ... and what's playing under the line */
@@ -9860,6 +10048,8 @@ index 0000000000..0b48c98f04
 +void aui_progress(int x, int y, int w, int h, long pos, long len);
 +/* battery colour: green 66-100%, orange 31-65%, red 30% and under */
 +unsigned aui_batt_rgb(int pct);
++unsigned aui_batt_rgb_ipod(int pct);     /* Original / Dark */
++unsigned aui_batt_shine(unsigned c);
 +/* the charging bolt (7x8 plus a 1 pixel edge) at x, y, drawn with rect() */
 +void aui_bolt(void (*rect)(int x, int y, int w, int h, unsigned rgb), int x, int y);
 +void aui_pix(const char *const *rows, int n, int x, int y, unsigned rgb);
@@ -9882,6 +10072,8 @@ index 0000000000..0b48c98f04
 +void aui_text(int font, int x, int y, unsigned rgb, const char *s,
 +              int maxw, int align);             /* align 0=L 1=C 2=R */
 +void aui_update(void);
++/* left-aligned text that slides along when it's too long (like a phone) */
++void aui_marquee(int font, int x, int y, unsigned rgb, const char *s, int maxw);
 +void aui_update_rect(int x, int y, int w, int h);
 +
 +/* loading screens: 'once' plays the animation from start_tick to the end */
@@ -9899,7 +10091,7 @@ index 0000000000..0b48c98f04
 +bool aui_woke(void);                    /* screen just turned back on? */
 +extern bool aui_dirty;                  /* set to make the screen redraw */
 +extern long aui_quiet_until;
-+#define ASHER_OS_VERSION "2.7.0"
++#define ASHER_OS_VERSION "2.7.1"
 +#define ASHER_ASSETS_VERSION "2.7"
 +extern bool aui_assets_old;      /* the .rockbox picture files are older than the firmware */            /* skip loading screens until this tick */
 +#endif
@@ -15140,7 +15332,7 @@ index d29f4d1612..16504e8791 100644
              if (fd >= 0) {
                  read_line(fd, ipod_name, sizeof(ipod_name));
 diff --git a/apps/keymaps/keymap-ipod.c b/apps/keymaps/keymap-ipod.c
-index 787d930468..d523b55cba 100644
+index 787d930468..7fecc7c9ee 100644
 --- a/apps/keymaps/keymap-ipod.c
 +++ b/apps/keymaps/keymap-ipod.c
 @@ -50,7 +50,8 @@ static const struct button_mapping button_context_standard[]  = {
@@ -15153,6 +15345,30 @@ index 787d930468..d523b55cba 100644
  
      LAST_ITEM_IN_LIST
  }; /* button_context_standard */
+@@ -111,6 +112,15 @@ static const struct button_mapping button_context_settings[]  = {
+     LAST_ITEM_IN_LIST__NEXTLIST(CONTEXT_STD)
+ }; /* button_context_settings */
+ 
++/* Asher OS 2.7: Set Time/Date - Play/Pause jumps between the time row and
++ * the date row; << >> still move one field, the wheel changes it */
++static const struct button_mapping button_context_settings_time[]  = {
++    { ACTION_STD_CONTEXT,           BUTTON_PLAY|BUTTON_REL,      BUTTON_PLAY },
++    { ACTION_NONE,                  BUTTON_PLAY|BUTTON_REPEAT,   BUTTON_NONE },
++    { ACTION_STD_QUICKSCREEN,       BUTTON_MENU|BUTTON_REPEAT,   BUTTON_MENU },
++    LAST_ITEM_IN_LIST__NEXTLIST(CONTEXT_SETTINGS)
++}; /* button_context_settings_time */
++
+ static const struct button_mapping button_context_yesno[]  = {
+     { ACTION_YESNO_ACCEPT,          BUTTON_SELECT,                  BUTTON_NONE },
+     { ACTION_STD_CANCEL,          BUTTON_PLAY,                  BUTTON_NONE },
+@@ -460,6 +470,7 @@ const struct button_mapping* get_context_mapping(int context)
+         case CONTEXT_SETTINGS_EQ:
+         case CONTEXT_SETTINGS_COLOURCHOOSER:
+         case CONTEXT_SETTINGS_TIME:
++            return button_context_settings_time;
+         case CONTEXT_SETTINGS:
+         case CONTEXT_SETTINGS_RECTRIGGER:
+             return button_context_settings;
 diff --git a/apps/lang/english.lang b/apps/lang/english.lang
 index 112c4d9257..8b7ff4d209 100644
 --- a/apps/lang/english.lang
@@ -15619,6 +15835,33 @@ index 61d16f4cb1..2f84c6388f 100644
  #endif
 +          ,&asher_sound_reset_item
           );
+diff --git a/apps/menus/time_menu.c b/apps/menus/time_menu.c
+index 6c282a2865..e5cd8a4d29 100644
+--- a/apps/menus/time_menu.c
++++ b/apps/menus/time_menu.c
+@@ -1,3 +1,4 @@
++#define ASHER_OS_NO_RDS   /* Asher OS: iPods have no FM radio, so no RDS clock sync */
+ /***************************************************************************
+  *             __________               __   ___.
+  *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
+@@ -224,7 +225,7 @@ static int time_menu_callback(int action,
+     return action;
+ }
+ 
+-#if defined(HAVE_RDS_CAP) && defined(CONFIG_RTC)
++#if defined(HAVE_RDS_CAP) && defined(CONFIG_RTC) && !defined(ASHER_OS_NO_RDS)
+ MENUITEM_SETTING(sync_rds_time, &global_settings.sync_rds_time, NULL);
+ #endif
+ 
+@@ -236,7 +237,7 @@ MAKE_MENU(time_menu, ID2P(LANG_TIME_MENU), time_menu_callback, Icon_NOICON,
+           &alarm_wake_up_screen,
+ #endif
+ #endif
+-#if defined(HAVE_RDS_CAP) && defined(CONFIG_RTC)
++#if defined(HAVE_RDS_CAP) && defined(CONFIG_RTC) && !defined(ASHER_OS_NO_RDS)
+           &sync_rds_time,
+ #endif
+           &timeformat);
 diff --git a/apps/misc.c b/apps/misc.c
 index 983fbc92f3..c6e5b55f3f 100644
 --- a/apps/misc.c
@@ -16224,6 +16467,23 @@ index 918669b245..2a828d63ec 100644
  
                  ignore_back_button_stub(false);
  
+diff --git a/apps/screens.c b/apps/screens.c
+index 59a7c25806..6c3151f3e6 100644
+--- a/apps/screens.c
++++ b/apps/screens.c
+@@ -341,6 +341,12 @@ bool set_time_screen(const char* title, struct tm *tm, bool set_date)
+                 say_time(cursorpos, tm);
+                 break;
+ 
++            case ACTION_STD_CONTEXT:     /* Play/Pause: time row <-> date row */
++                if (last_item >= IDX_DAY)
++                    cursorpos = cursorpos < IDX_YEAR ? IDX_YEAR : IDX_HOURS;
++                say_time(cursorpos, tm);
++                break;
++
+             case ACTION_STD_OK:
+                 done = true;
+                 break;
 diff --git a/apps/tagcache.c b/apps/tagcache.c
 index 4ad028869e..f199163090 100644
 --- a/apps/tagcache.c
