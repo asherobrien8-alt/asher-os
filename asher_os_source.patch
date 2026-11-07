@@ -4866,10 +4866,10 @@ index 0000000000..5835081571
 +#endif
 diff --git a/apps/asher/asher_nowplaying.c b/apps/asher/asher_nowplaying.c
 new file mode 100644
-index 0000000000..c3c4eb7a37
+index 0000000000..07c613bf02
 --- /dev/null
 +++ b/apps/asher/asher_nowplaying.c
-@@ -0,0 +1,723 @@
+@@ -0,0 +1,722 @@
 +/* Asher OS Now Playing: album art, song + artist, play/pause status,
 + * kbps, elapsed / total time. The background is the album art blown up
 + * and blurred (or a soft colour blend when a song has no art). */
@@ -5328,7 +5328,6 @@ index 0000000000..c3c4eb7a37
 +        aui_fill(AX, AY, AS, AS, 0x2c2550);
 +        aui_moon_disc(AX + AS / 2 - 22, AY + AS / 2 - 22, 44, MP_FG, MP_DIM);
 +    }
-+    aui_sparkle(TX + TW - 8, AY + AS - 14, 3, MP_FG);
 +    /* the line: dim all the way, bright up to where the song is */
 +    int lx = 14, lw = AUI_W - 28 - 48;
 +    long p = n.vol ? aui_volume_pct() : n.pos, q = n.vol ? 100 : (n.len > 0 ? n.len : 1);
@@ -7159,10 +7158,10 @@ index 0000000000..5349121a88
 +#endif
 diff --git a/apps/asher/asher_stats.c b/apps/asher/asher_stats.c
 new file mode 100644
-index 0000000000..d40a974648
+index 0000000000..b9223aab0a
 --- /dev/null
 +++ b/apps/asher/asher_stats.c
-@@ -0,0 +1,549 @@
+@@ -0,0 +1,551 @@
 +/* Asher OS Stats screen, laid out as retro desktop windows:
 + * album_art.jpg, wallpaper.gif (live), now_playing.txt and moon.jpeg. */
 +#include <stdio.h>
@@ -7440,10 +7439,12 @@ index 0000000000..d40a974648
 +        struct tm *tm = get_time();
 +        static const char *dn[7] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
 +        static const char *mn[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
-+        aui_text(AF_SMALL, sx[2] + 10, BY + 8, 0xfa2346, dn[tm->tm_wday % 7], sw3 - 12, 0);
++        /* everything centred in the tile: day, big date, month */
++        int cx = sx[2] + sw3 / 2;
++        aui_text(AF_SMALL, cx, BY + 8, 0xfa2346, dn[tm->tm_wday % 7], sw3 - 8, 1);
 +        snprintf(buf, sizeof(buf), "%d", tm->tm_mday);
-+        aui_text(AF_TITLE, sx[2] + 10, BY + 24, tc, buf, sw3 - 12, 0);
-+        aui_text(AF_SMALLR, sx[2] + 10, BY + BH - 18, sc, mn[tm->tm_mon % 12], sw3 - 12, 0);
++        aui_text(AF_TITLE, cx, BY + (BH - aui_font_h(AF_TITLE)) / 2, tc, buf, sw3 - 8, 1);
++        aui_text(AF_SMALLR, cx, BY + BH - 18, sc, mn[tm->tm_mon % 12], sw3 - 8, 1);
 +    }
 +    aui_topbar_text("Info");
 +    aui_bar_dark = false;
@@ -8173,7 +8174,7 @@ index 0000000000..728fa524c6
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..8477cd0fff
+index 0000000000..93a79bb3ff
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
 @@ -0,0 +1,1783 @@
@@ -9749,7 +9750,7 @@ index 0000000000..8477cd0fff
 +        else aui_time_str(buf, sizeof(buf));
 +        aui_text(AF_SMALLR, AUI_W - 8, 14, MP_FG, buf, 90, 2);
 +        if (title && title[0] && strcmp(title, "Asher OS"))
-+            aui_text(AF_SMALLR, 182, 14, MP_MID, title, 84, 1);
++            aui_text(AF_SMALLR, 188, 14, MP_MID, title, 104, 1);
 +        (void)tm;
 +        return;
 +    }
