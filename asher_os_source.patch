@@ -620,10 +620,10 @@ index 0000000000..541fe549c4
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
 new file mode 100644
-index 0000000000..167d9ac4e0
+index 0000000000..aba4d8c572
 --- /dev/null
 +++ b/apps/asher/asher_home.c
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,458 @@
 +/* Asher OS home screen.
 + *  Bubbles / Dark: four glossy bubbles in an even 2x2 grid over the live
 + *  wallpaper. Turning right moves right, then wraps down to the first box
@@ -901,7 +901,7 @@ index 0000000000..167d9ac4e0
 +        else
 +            aui_corners(ax, ay, as, as, 10, NULL, 0xf4f4f6);
 +        long len = id3->length ? (long)id3->length : 1;
-+        int px0 = ax + as + 12, pw = WX + WW - 14 - px0, py = WY + WH - 18;
++        int px0 = ax + as + 12, pw = WX + WW - 14 - px0, py = WY + WH - 26;
 +        aui_round(px0, py, pw, 4, 2, 0xd1d1d6, 0xd1d1d6);
 +        int fl = (int)((long long)pw * MIN((long)id3->elapsed, len) / len);
 +        if (fl > 0) aui_round(px0, py, MAX(4, fl), 4, 2, 0xfa2346, 0xfa2346);
@@ -930,6 +930,17 @@ index 0000000000..167d9ac4e0
 +        aui_text(AF_SMALL, tx, ay, paused ? 0xff9500 : 0xfa2346, paused ? "PAUSED" : "NOW PLAYING", tw, 0);
 +        aui_marquee(AF_MED, tx, ay + 17, 0x1c1c1e, aui_song_title(id3), tw);
 +        aui_text(AF_SMALLR, tx, ay + 36, 0x6e6e73, (id3->artist && id3->artist[0]) ? id3->artist : "", tw, 0);
++        {
++            /* the song's time under its bar, like a phone's widget */
++            char t1[16], t2[16], t3[20];
++            long el = (long)id3->elapsed, ln = (long)id3->length;
++            aui_fmt_time(t1, sizeof(t1), el);
++            aui_fmt_time(t2, sizeof(t2), ln > el ? ln - el : 0);
++            snprintf(t3, sizeof(t3), "-%s", t2);
++            int ty = WY + WH - 21;
++            aui_text(AF_SMALLR, tx, ty, 0x6e6e73, t1, 60, 0);
++            aui_text(AF_SMALLR, WX + WW - 14, ty, 0x6e6e73, t3, 60, 2);
++        }
 +    }
 +    else
 +    {
@@ -4855,10 +4866,10 @@ index 0000000000..5835081571
 +#endif
 diff --git a/apps/asher/asher_nowplaying.c b/apps/asher/asher_nowplaying.c
 new file mode 100644
-index 0000000000..e2810d2ced
+index 0000000000..c3c4eb7a37
 --- /dev/null
 +++ b/apps/asher/asher_nowplaying.c
-@@ -0,0 +1,722 @@
+@@ -0,0 +1,723 @@
 +/* Asher OS Now Playing: album art, song + artist, play/pause status,
 + * kbps, elapsed / total time. The background is the album art blown up
 + * and blurred (or a soft colour blend when a song has no art). */
@@ -5368,9 +5379,10 @@ index 0000000000..e2810d2ced
 +    lcd_set_viewport(NULL);
 +    lcd_set_drawmode(DRMODE_SOLID);
 +    lcd_set_foreground(LCD_RGBPACK((MP_FG >> 16) & 255, (MP_FG >> 8) & 255, MP_FG & 255));
-+    if (n.playing && !n.paused)
++    /* like every player: pause while it plays, play while it's paused */
++    if (n.playing && !n.paused) { lcd_fillrect(15, by + 2, 2, 7); lcd_fillrect(19, by + 2, 2, 7); }
++    else
 +        for (int k = 0; k < 5; k++) lcd_vline(15 + k, by + 2 + k * 7 / 10, by + 8 - k * 7 / 10);
-+    else { lcd_fillrect(15, by + 2, 2, 7); lcd_fillrect(19, by + 2, 2, 7); }
 +    if (n.vol) snprintf(buf, sizeof(buf), "Volume %d%%", aui_volume_pct());
 +    else
 +    {
@@ -7147,10 +7159,10 @@ index 0000000000..5349121a88
 +#endif
 diff --git a/apps/asher/asher_stats.c b/apps/asher/asher_stats.c
 new file mode 100644
-index 0000000000..09e004313b
+index 0000000000..d40a974648
 --- /dev/null
 +++ b/apps/asher/asher_stats.c
-@@ -0,0 +1,540 @@
+@@ -0,0 +1,549 @@
 +/* Asher OS Stats screen, laid out as retro desktop windows:
 + * album_art.jpg, wallpaper.gif (live), now_playing.txt and moon.jpeg. */
 +#include <stdio.h>
@@ -7353,10 +7365,11 @@ index 0000000000..09e004313b
 +    const int LW = 134, RX = G + LW + G, RW = AUI_W - RX - G;
 +    /* battery ring (big tile, left) */
 +    wtile(G, TY, LW, TH);
-+    int rcx = G + 50, rcy = TY + TH / 2;
-+    aui_aa_arc(rcx, rcy, 36, 28, 3600, 0xe5e5ea);
-+    if (bat > 0) aui_aa_arc(rcx, rcy, 36, 28, bat * 36, charging_now() ? 0x30d158 : aui_batt_rgb(bat));
-+    if (charging_now()) aui_bolt(aui_fill, rcx - 4, rcy + 10);
++    /* 2.7.2: ring on top, time left under it, so nothing runs off the tile */
++    int rcx = G + LW / 2, rcy = TY + 40;
++    aui_aa_arc(rcx, rcy, 30, 23, 3600, 0xe5e5ea);
++    if (bat > 0) aui_aa_arc(rcx, rcy, 30, 23, bat * 36, charging_now() ? 0x30d158 : aui_batt_rgb(bat));
++    if (charging_now()) aui_bolt(aui_fill, rcx - 4, rcy + 9);
 +    /* now playing (big tile, right) */
 +    wtile(RX, TY, RW, TH);
 +    int ax = RX + 10, ay = TY + 10, as = 52;
@@ -7378,16 +7391,14 @@ index 0000000000..09e004313b
 +    int scx = sx[0] + 26, scy = BY + BH / 2 + 6;
 +    aui_aa_arc(scx, scy, 18, 13, 3600, 0xe5e5ea);
 +    if (used > 0) aui_aa_arc(scx, scy, 18, 13, used * 36, 0x0a84ff);
-+    aui_sprite_c(SPR_MOON0 + ph, sx[1] + sw3 / 2, BY + 48);
++    aui_sprite_c(SPR_MOON0 + ph, sx[1] + sw3 / 2, BY + 40);
 +    aui_present();
 +
 +    /* battery text */
 +    snprintf(buf, sizeof(buf), bat >= 0 ? "%d%%" : "--", bat);
 +    aui_text(AF_MED, rcx, rcy - aui_font_h(AF_MED) / 2 - (charging_now() ? 4 : 0), tc, buf, 60, 1);
-+    aui_text(AF_SMALL, G + 92, TY + 12, sc, "Battery", 50, 0);
-+    batt_left(buf, sizeof(buf), true);
-+    aui_text(AF_SMALL, G + 92, TY + 30, tc, buf, 46, 0);
-+    if (!charging_now() && battery_time() > 0) aui_text(AF_SMALLR, G + 92, TY + 46, sc, "left", 46, 0);
++    batt_left(buf, sizeof(buf), false);
++    aui_text(AF_SMALL, rcx, TY + TH - 22, tc, buf, LW - 12, 1);
 +    /* now playing text */
 +    int tx = ax + as + 8, tw = RX + RW - 10 - tx;
 +    aui_text(AF_SMALL, tx, ay, paused ? 0xff9500 : 0xfa2346,
@@ -7401,7 +7412,16 @@ index 0000000000..09e004313b
 +        aui_text(AF_SMALLR, tx, ay + 18, sc, "Pick something in Music", tw, 0);
 +    if (vol) snprintf(buf, sizeof(buf), "Volume %d%%", aui_volume_pct());
 +    else snprintf(buf, sizeof(buf), "Shuffle %s", global_settings.playlist_shuffle ? "On" : "Off");
-+    aui_text(AF_SMALLR, RX + 10, TY + TH - 34, global_settings.playlist_shuffle || vol ? 0x0a84ff : sc, buf, RW - 20, 0);
++    aui_text(AF_SMALLR, RX + 10, TY + TH - 34, global_settings.playlist_shuffle || vol ? 0x0a84ff : sc, buf, RW / 2, 0);
++    if (playing && !vol)
++    {
++        /* where the song is, next to the bar it fills */
++        char a[16], b[16];
++        aui_fmt_time(a, sizeof(a), pos);
++        aui_fmt_time(b, sizeof(b), id3->length);
++        snprintf(buf, sizeof(buf), "%s / %s", a, b);
++        aui_text(AF_SMALLR, RX + RW - 10, TY + TH - 34, sc, buf, RW / 2, 2);
++    }
 +    /* small tile text */
 +    aui_text(AF_SMALL, sx[0] + 10, BY + 8, sc, "Storage", sw3 - 12, 0);
 +    {
@@ -7413,8 +7433,9 @@ index 0000000000..09e004313b
 +        }
 +    }
 +    aui_text(AF_SMALL, sx[1] + 10, BY + 8, sc, "Moon", sw3 - 12, 0);
-+    snprintf(buf, sizeof(buf), "%s %s", moon_l1[ph], ph == 0 || ph == 4 ? "" : moon_l2[ph]);
-+    aui_text(AF_SMALLR, sx[1] + sw3 / 2, BY + BH - 18, tc, buf, sw3 - 6, 1);
++    /* the phase on two short lines so it always fits */
++    aui_text(AF_SMALLR, sx[1] + sw3 / 2, BY + BH - 31, tc, moon_l1[ph], sw3 - 8, 1);
++    aui_text(AF_SMALLR, sx[1] + sw3 / 2, BY + BH - 17, sc, moon_l2[ph], sw3 - 8, 1);
 +    {
 +        struct tm *tm = get_time();
 +        static const char *dn[7] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
@@ -8152,7 +8173,7 @@ index 0000000000..728fa524c6
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..037f120611
+index 0000000000..8477cd0fff
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
 @@ -0,0 +1,1783 @@
@@ -9332,7 +9353,7 @@ index 0000000000..037f120611
 +    lcd_set_drawmode(DRMODE_SOLID);
 +    lcd_set_foreground(LCD_RGBPACK((MP_FG >> 16) & 255, (MP_FG >> 8) & 255, MP_FG & 255));
 +    int gy = y + 2;
-+    if (st & AUDIO_STATUS_PAUSE) { lcd_fillrect(9, gy, 2, 7); lcd_fillrect(13, gy, 2, 7); }
++    if (!(st & AUDIO_STATUS_PAUSE)) { lcd_fillrect(9, gy, 2, 7); lcd_fillrect(13, gy, 2, 7); }
 +    else for (int k = 0; k < 5; k++) lcd_vline(9 + k, gy + k * 7 / 10, gy + 6 - k * 7 / 10);
 +    snprintf(buf, sizeof(buf), "%s - %s",
 +             (id3->artist && id3->artist[0]) ? id3->artist : "Unknown",
@@ -9941,7 +9962,7 @@ index 0000000000..037f120611
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..adfa55fa6b
+index 0000000000..ea1dbf103f
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
 @@ -0,0 +1,150 @@
@@ -10091,7 +10112,7 @@ index 0000000000..adfa55fa6b
 +bool aui_woke(void);                    /* screen just turned back on? */
 +extern bool aui_dirty;                  /* set to make the screen redraw */
 +extern long aui_quiet_until;
-+#define ASHER_OS_VERSION "2.7.1"
++#define ASHER_OS_VERSION "2.7.2"
 +#define ASHER_ASSETS_VERSION "2.7"
 +extern bool aui_assets_old;      /* the .rockbox picture files are older than the firmware */            /* skip loading screens until this tick */
 +#endif
