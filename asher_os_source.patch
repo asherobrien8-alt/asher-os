@@ -1,8 +1,8 @@
 diff --git a/apps/SOURCES b/apps/SOURCES
-index bb612b38fb..4846eeed0e 100644
+index bb612b38fb..6506435479 100644
 --- a/apps/SOURCES
 +++ b/apps/SOURCES
-@@ -20,6 +20,25 @@ menu.c
+@@ -20,6 +20,26 @@ menu.c
  menus/menu_common.c
  menus/display_menu.c
  menus/theme_menu.c
@@ -14,6 +14,7 @@ index bb612b38fb..4846eeed0e 100644
 +asher/asher_home.c
 +asher/asher_ui.c
 +asher/asher_usb.c
++asher/asher_alert.c
 +asher/asher_font3d.c
 +asher/asher_model.c
 +asher/asher_list.c
@@ -64,6 +65,197 @@ index a9029457f8..4f215d2085 100644
      return action;
  }
  
+diff --git a/apps/asher/asher_alert.c b/apps/asher/asher_alert.c
+new file mode 100644
+index 0000000000..3685ecf9ae
+--- /dev/null
++++ b/apps/asher/asher_alert.c
+@@ -0,0 +1,174 @@
++/* Asher OS 2.7.3: low battery warning.
++ * When the battery holds at 2% (or less) the iPod buzzes (the Taptic
++ * Engine that sits where the click speaker was, on the 5.5) twice like a
++ * text message, and plays a short soft three-note chime of its own over
++ * the music, with the music turned down while it plays.
++ * Same care as the low-battery shutdown: never in the first two minutes
++ * after switching on (the reading settles), never while charging, the
++ * level has to stay low for several seconds, and it only happens once per
++ * charge (it comes back after charging, or if the battery reads 5%+). */
++#include <stdbool.h>
++#include <string.h>
++#include "config.h"
++#include "system.h"
++#include "kernel.h"
++#include "powermgmt.h"
++#include "power.h"
++#include "pcm.h"
++#include "pcm_mixer.h"
++#include "asher_ui.h"
++#include "asher_font3d.h"
++#include "asher_alert.h"
++#if defined(IPOD_VIDEO) && !defined(SIMULATOR)
++#include "piezo.h"
++#endif
++
++#define WARN_PCT      2
++#define REARM_PCT     5
++#define BOOT_QUIET    (120 * HZ)     /* first two minutes: never */
++#define HOLD_SECS     8              /* the low reading has to stay */
++
++/* ---- the chime: E5, C5, G4, ringing into each other like a bell ------ */
++static const struct { unsigned short hz, start_ms, len_ms; } notes[3] = {
++    { 659, 0, 330 }, { 523, 170, 330 }, { 392, 340, 560 } };
++#define CHIME_MS 900
++#define NOTE_AMP 11000              /* three overlapping: about half volume */
++
++static short sine[256];
++static bool sine_ok;
++static uint32_t ch_rate, ch_pos, ch_total, ch_step[3], ch_phase[3];
++#define CHUNK 512
++static int16_t ch_buf[2][CHUNK * 2];
++static int ch_which;
++static volatile bool ch_playing;
++static long ch_done_at;
++
++static void make_sine(void)
++{
++    /* Bhaskara's sine, good to about 0.2%: plenty for a chime */
++    for (int i = 0; i < 256; i++)
++    {
++        int d = (i * 360) / 256;                  /* degrees */
++        int s = 1, x = d;
++        if (x >= 180) { x -= 180; s = -1; }
++        long num = 4L * x * (180 - x), den = 40500L - (long)x * (180 - x);
++        sine[i] = (short)(s * (num * 32767 / den));
++    }
++    sine_ok = true;
++}
++
++static void synth(int16_t *out, int frames)
++{
++    for (int f = 0; f < frames; f++)
++    {
++        uint32_t t = ch_pos + f;
++        int32_t sum = 0;
++        for (int n = 0; n < 3; n++)
++        {
++            uint32_t st = notes[n].start_ms * ch_rate / 1000;
++            uint32_t ln = notes[n].len_ms * ch_rate / 1000;
++            if (t < st || t >= st + ln) continue;
++            uint32_t k = t - st;
++            ch_phase[n] += ch_step[n];
++            int32_t v = sine[ch_phase[n] >> 24] + sine[(ch_phase[n] >> 23) & 255] / 4;
++            /* quick 5 ms rise, then a soft fall to nothing */
++            uint32_t att = ch_rate / 200;
++            int32_t env = k < att ? (int32_t)(k * 256 / att)
++                                  : (int32_t)(((ln - k) * 256 / ln) * ((ln - k) * 256 / ln) / 256);
++            sum += v * env / 256 * NOTE_AMP / 32767;
++        }
++        if (sum > 32000) sum = 32000;
++        if (sum < -32000) sum = -32000;
++        out[2 * f] = out[2 * f + 1] = (int16_t)sum;
++    }
++    ch_pos += frames;
++}
++
++static void chime_more(const void **start, size_t *size)
++{
++    if (ch_pos >= ch_total) { *size = 0; ch_playing = false; return; }
++    int n = MIN(CHUNK, (int)(ch_total - ch_pos));
++    ch_which ^= 1;
++    synth(ch_buf[ch_which], n);
++    *start = ch_buf[ch_which];
++    *size = n * 4;
++}
++
++static void chime_start(void)
++{
++    if (!sine_ok) make_sine();
++    ch_rate = mixer_get_frequency();
++    if (!ch_rate) ch_rate = 44100;
++    ch_pos = 0;
++    ch_total = CHIME_MS * ch_rate / 1000;
++    for (int n = 0; n < 3; n++)
++    {
++        ch_phase[n] = 0;
++        ch_step[n] = (uint32_t)(((uint64_t)notes[n].hz << 32) / ch_rate);
++    }
++    /* the music steps back to about a third while the chime plays */
++    mixer_channel_set_amplitude(PCM_MIXER_CHAN_PLAYBACK, MIX_AMP_UNITY * 3 / 10);
++    mixer_channel_set_amplitude(PCM_MIXER_CHAN_VOICE, MIX_AMP_UNITY);
++    static const struct mixer_play_cbs cbs = { .get_more = chime_more };
++    const void *s; size_t sz;
++    ch_which = 0;
++    synth(ch_buf[0], CHUNK);
++    s = ch_buf[0]; sz = CHUNK * 4;
++    ch_playing = true;
++    mixer_channel_play_data(PCM_MIXER_CHAN_VOICE, &cbs, s, sz);
++}
++
++/* the Taptic Engine: two ~0.4 s buzzes, like a text message */
++static void buzz(void)
++{
++#if defined(IPOD_VIDEO) && !defined(SIMULATOR)
++    piezo_play_for_tick(piezo_hz(175), 0x80, HZ * 2 / 5);
++    sleep(HZ * 55 / 100);
++    piezo_play_for_tick(piezo_hz(175), 0x80, HZ * 2 / 5);
++#endif
++}
++
++static void warn_now(void)
++{
++    chime_start();
++    if (aui_depth > 0 && aui_screen_on())
++        asher_toast("Battery 2% - charge soon", 3 * HZ, false);
++    buzz();
++    ch_done_at = current_tick + HZ;            /* music back up after this */
++}
++
++/* called about ten times a second from the helper thread */
++void asher_alert_tick(void)
++{
++    static long last_check;
++    static int low_secs;
++    static bool warned;
++
++    /* bring the music back up once the chime is done */
++    if (ch_done_at && TIME_AFTER(current_tick, ch_done_at)
++        && (!ch_playing || TIME_AFTER(current_tick, ch_done_at + 2 * HZ)))
++    {
++        ch_done_at = 0;
++        mixer_channel_set_amplitude(PCM_MIXER_CHAN_PLAYBACK, MIX_AMP_UNITY);
++    }
++    if (TIME_BEFORE(current_tick, last_check + HZ)) return;
++    last_check = current_tick;
++
++    int pct = battery_level();
++    bool charging = false;
++#if CONFIG_CHARGING
++    charging = power_input_present();
++#endif
++    if (charging || pct >= REARM_PCT) { warned = false; low_secs = 0; return; }
++    if (current_tick < BOOT_QUIET || pct < 0 || pct > WARN_PCT) { low_secs = 0; return; }
++    if (warned) return;
++    if (++low_secs < HOLD_SECS) return;
++    warned = true;
++    warn_now();
++}
++
++/* Settings test hook: play it now (no battery checks) */
++void asher_alert_test(void)
++{
++    warn_now();
++}
+diff --git a/apps/asher/asher_alert.h b/apps/asher/asher_alert.h
+new file mode 100644
+index 0000000000..fef8fc0f4d
+--- /dev/null
++++ b/apps/asher/asher_alert.h
+@@ -0,0 +1,5 @@
++#ifndef ASHER_ALERT_H
++#define ASHER_ALERT_H
++void asher_alert_tick(void);   /* low battery buzz + chime (helper thread) */
++void asher_alert_test(void);   /* play it now */
++#endif
 diff --git a/apps/asher/asher_boot.c b/apps/asher/asher_boot.c
 new file mode 100644
 index 0000000000..fc5dce5a48
@@ -2196,10 +2388,10 @@ index 0000000000..602c7f6ed6
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000000..3c0635f51c
+index 0000000000..475d0a34d4
 --- /dev/null
 +++ b/apps/asher/asher_music.c
-@@ -0,0 +1,2640 @@
+@@ -0,0 +1,2647 @@
 +/* Asher OS Music section: Search, Artists, Playlists, Shuffle, All Songs.
 + * A compact index of the music database (title, artist) is built once and
 + * kept in RAM, so browsing and searching are instant. */
@@ -3376,7 +3568,7 @@ index 0000000000..3c0635f51c
 +    {
 +        aui_text(AF_MED, 18, AUI_BAR + 9, q[0] ? t->text : t->sub, q[0] ? buf : kb_naming, AUI_W - 36, 0);
 +        aui_text(AF_SMALLR, AUI_W / 2, AUI_BAR + 38, t->sub, "Enter saves it  -  hold Play cancels", AUI_W - 20, 1);
-+        aui_text(AF_SMALLR, AUI_W / 2, AUI_BAR + 54, t->sub, "Hold << to delete a letter", AUI_W - 20, 1);
++        aui_text(AF_SMALLR, AUI_W / 2, AUI_BAR + 54, t->sub, "Hold << to delete, keep holding for words", AUI_W - 20, 1);
 +    }
 +    else
 +    aui_text(AF_MED, 18, AUI_BAR + 9, q[0] ? t->text : t->sub, q[0] ? buf : "Type to search", AUI_W - 110, 0);
@@ -3462,18 +3654,25 @@ index 0000000000..3c0635f51c
 +            case KB_LEFT:
 +                hold_from = 0; hold_done = false;
 +                kc = (kc + kb_len(kr) - 1) % kb_len(kr); redraw = true; break;
-+            case KB_DELHOLD:             /* << held: one letter goes after ~1s */
-+                if (!hold_from) hold_from = current_tick;
-+                if (!hold_done && TIME_AFTER(current_tick, hold_from + HZ * 2 / 3))
++            case KB_DELHOLD:
++                /* 2.7.3: << held: the letter goes the moment the hold
++                 * "clicks" (the first repeat); keep holding and whole
++                 * words go, one about every half second */
++                if (!hold_from)
 +                {
-+                    hold_done = true;
-+                    if (len)
-+                    {
-+                        q[len - 1] = 0;
-+                        if (!kb_naming) run_search(q);
-+                        redraw = true;
-+                    }
++                    hold_from = current_tick;
++                    hold_done = false;
++                    if (len) { q[len - 1] = 0; len--; redraw = true; }
 +                }
++                else if (TIME_AFTER(current_tick, hold_from + (hold_done ? HZ / 2 : HZ * 2 / 3)))
++                {
++                    hold_from = current_tick;
++                    hold_done = true;               /* now in word mode */
++                    while (len && q[len - 1] == ' ') q[--len] = 0;
++                    while (len && q[len - 1] != ' ') q[--len] = 0;
++                    redraw = true;
++                }
++                if (redraw && !kb_naming) run_search(q);
 +                break;
 +            case KB_DELREL:              /* let go: the next hold deletes again */
 +                hold_from = 0; hold_done = false;
@@ -8174,10 +8373,10 @@ index 0000000000..728fa524c6
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..93a79bb3ff
+index 0000000000..127596b59c
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,1783 @@
+@@ -0,0 +1,1785 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -8210,6 +8409,7 @@ index 0000000000..93a79bb3ff
 +#include "asher_theme.h"
 +#include "asher_wallpaper.h"
 +#include "moonphase.h"
++#include "asher_alert.h"
 +#include "asher_prefs.h"
 +#include "metadata.h"
 +#include "pcm.h"
@@ -9029,6 +9229,7 @@ index 0000000000..93a79bb3ff
 +        bool live = !ldr_live && aui_live_active();
 +        sleep(ldr_live ? HZ / 25 : live ? HZ / 20 : HZ / 10);
 +        if (live && !ldr_in_draw) aui_live_tick();
++        asher_alert_tick();                 /* 2.7.3: low battery warning */
 +        if (in_boosted && TIME_AFTER(current_tick, in_until))
 +            { in_boosted = false; cpu_boost(false); }
 +#ifdef HAS_BUTTON_HOLD
@@ -9963,7 +10164,7 @@ index 0000000000..93a79bb3ff
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..ea1dbf103f
+index 0000000000..afe0c42196
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
 @@ -0,0 +1,150 @@
@@ -10113,7 +10314,7 @@ index 0000000000..ea1dbf103f
 +bool aui_woke(void);                    /* screen just turned back on? */
 +extern bool aui_dirty;                  /* set to make the screen redraw */
 +extern long aui_quiet_until;
-+#define ASHER_OS_VERSION "2.7.2"
++#define ASHER_OS_VERSION "2.7.3"
 +#define ASHER_ASSETS_VERSION "2.7"
 +extern bool aui_assets_old;      /* the .rockbox picture files are older than the firmware */            /* skip loading screens until this tick */
 +#endif
@@ -15755,7 +15956,7 @@ index a09d81de3d..7ee8305987 100644
  /*    MAIN MENU                    */
  /***********************************/
 diff --git a/apps/menus/sound_menu.c b/apps/menus/sound_menu.c
-index 61d16f4cb1..2f84c6388f 100644
+index 61d16f4cb1..0d354d6cc5 100644
 --- a/apps/menus/sound_menu.c
 +++ b/apps/menus/sound_menu.c
 @@ -36,6 +36,8 @@
@@ -15791,7 +15992,7 @@ index 61d16f4cb1..2f84c6388f 100644
            ,&balance,&channel_config,&stereo_width
  #ifdef AUDIOHW_HAVE_DEPTH_3D
            ,&depth_3d
-@@ -262,13 +268,62 @@ MAKE_MENU(sound_settings, ID2P(LANG_SOUND_SETTINGS), NULL, Icon_Audio,
+@@ -262,13 +268,73 @@ MAKE_MENU(sound_settings, ID2P(LANG_SOUND_SETTINGS), NULL, Icon_Audio,
  #ifdef AUDIOHW_HAVE_POWER_MODE
            ,&power_mode
  #endif
@@ -15846,6 +16047,16 @@ index 61d16f4cb1..2f84c6388f 100644
 +MENUITEM_FUNCTION(asher_sound_reset_item, 0, "Reset Audio Settings",
 +                  asher_sound_reset, NULL, Icon_NOICON);
 +
++/* Asher OS 2.7.3: hear (and feel) the low battery warning */
++static int asher_lowbatt_test(void)
++{
++    extern void asher_alert_test(void);
++    asher_alert_test();
++    return 0;
++}
++MENUITEM_FUNCTION(asher_lowbatt_item, 0, "Test Low Battery Alert",
++                  asher_lowbatt_test, NULL, Icon_NOICON);
++
 +MAKE_MENU(sound_settings, ID2P(LANG_SOUND_SETTINGS), NULL, Icon_Audio,
 +          &volume
 +          ,&volume_limit
@@ -15855,6 +16066,7 @@ index 61d16f4cb1..2f84c6388f 100644
  #ifdef HAVE_SPEAKER
           ,&speaker_mode
  #endif
++          ,&asher_lowbatt_item
 +          ,&asher_sound_reset_item
           );
 diff --git a/apps/menus/time_menu.c b/apps/menus/time_menu.c
