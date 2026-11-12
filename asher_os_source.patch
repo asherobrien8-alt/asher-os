@@ -68,7 +68,7 @@ index a9029457f8..4f215d2085 100644
  
 diff --git a/apps/asher/asher_alert.c b/apps/asher/asher_alert.c
 new file mode 100644
-index 0000000000..ec5151c5e3
+index 0000000000..2f3a9a116e
 --- /dev/null
 +++ b/apps/asher/asher_alert.c
 @@ -0,0 +1,173 @@
@@ -192,12 +192,12 @@ index 0000000000..ec5151c5e3
 +    mixer_channel_play_data(PCM_MIXER_CHAN_VOICE, &cbs, s, sz);
 +}
 +
-+/* the Taptic Engine: one long ~2 s buzz (runs on the piezo thread,
++/* the Taptic Engine: one firm ~0.8 s buzz (runs on the piezo thread,
 +   so nothing here waits for it) */
 +static void buzz(void)
 +{
 +#if defined(IPOD_VIDEO) && !defined(SIMULATOR)
-+    piezo_play_for_tick(piezo_hz(175), 0x80, HZ * 2);
++    piezo_play_for_tick(piezo_hz(175), 0x80, HZ * 8 / 10);
 +#endif
 +}
 +
@@ -8562,10 +8562,10 @@ index 0000000000..b9d90c7acd
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..08f06b7145
+index 0000000000..9d6707f8f3
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,1788 @@
+@@ -0,0 +1,1789 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -9416,7 +9416,8 @@ index 0000000000..08f06b7145
 +        /* quick while something loads, otherwise a calm 10 times a second
 +         * (just enough for the hold switch to feel instant) */
 +        bool live = !ldr_live && aui_live_active();
-+        sleep(ldr_live ? HZ / 25 : live ? HZ / 30 : HZ / 10);   /* 2.7.4: scrolling text ~33 fps */
++        sleep(ldr_live ? HZ / 25 : live ? HZ / 30          /* 2.7.4: scrolling text ~33 fps */
++              : aui_screen_on() ? HZ / 10 : HZ / 4);  /* screen dark: wake less, save battery */
 +        if (live && !ldr_in_draw) aui_live_tick();
 +        asher_alert_tick();                 /* 2.7.3: low battery warning */
 +        if (in_boosted && TIME_AFTER(current_tick, in_until))
@@ -10356,7 +10357,7 @@ index 0000000000..08f06b7145
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..c1fb9e9283
+index 0000000000..5783a95527
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
 @@ -0,0 +1,150 @@
@@ -10506,16 +10507,16 @@ index 0000000000..c1fb9e9283
 +bool aui_woke(void);                    /* screen just turned back on? */
 +extern bool aui_dirty;                  /* set to make the screen redraw */
 +extern long aui_quiet_until;
-+#define ASHER_OS_VERSION "2.7.4"
++#define ASHER_OS_VERSION "2.7.5"
 +#define ASHER_ASSETS_VERSION "2.7"
 +extern bool aui_assets_old;      /* the .rockbox picture files are older than the firmware */            /* skip loading screens until this tick */
 +#endif
 diff --git a/apps/asher/asher_usb.c b/apps/asher/asher_usb.c
 new file mode 100644
-index 0000000000..0ed217aa82
+index 0000000000..163ee9db61
 --- /dev/null
 +++ b/apps/asher/asher_usb.c
-@@ -0,0 +1,305 @@
+@@ -0,0 +1,311 @@
 +/* Asher OS 2.7: the "connected to a computer" screens, one per theme.
 + * Everything here is drawn by code (nothing is read from the drive, which
 + * belongs to the computer while this is up) and always has something
@@ -10539,10 +10540,16 @@ index 0000000000..0ed217aa82
 +    return s == STY_ORIG || s == STY_DARK || s == STY_MODERN || s == STY_MOON;
 +}
 +
++#if defined(IPOD_VIDEO) && !defined(SIMULATOR)
++extern void lcd_wait_frame_done(int max_ticks);
++#endif
 +static void put_rect(int x, int y, int w, int h)
 +{
 +    lcd_set_viewport(NULL);
 +    lcd_bitmap_part(aui_fb, x, y, AUI_W, x, y, w, h);
++#if defined(IPOD_VIDEO) && !defined(SIMULATOR)
++    lcd_wait_frame_done(3);               /* 2.7.4: no tearing */
++#endif
 +    lcd_update_rect(x, y, w, h);
 +}
 +
@@ -15306,10 +15313,10 @@ index 440164984b..5b11efd34a 100644
      {
          struct screen * screen = &(screens[i]);
 diff --git a/apps/gui/usb_screen.c b/apps/gui/usb_screen.c
-index b1a12d2d83..4ebe6202bd 100644
+index b1a12d2d83..b9df9dab33 100644
 --- a/apps/gui/usb_screen.c
 +++ b/apps/gui/usb_screen.c
-@@ -43,6 +43,109 @@
+@@ -43,6 +43,115 @@
  #include "icons.h"
  
  #include "bitmaps/usblogo.h"
@@ -15412,14 +15419,20 @@ index b1a12d2d83..4ebe6202bd 100644
 +    if (full)
 +        lcd_update();
 +    else
++    {
++#if defined(IPOD_VIDEO) && !defined(SIMULATOR)
++        extern void lcd_wait_frame_done(int max_ticks);
++        lcd_wait_frame_done(3);       /* no tearing through the stick */
++#endif
 +        lcd_update_rect(STICK_X, STICK_Y - 4, BMPWIDTH_usbstick, BMPHEIGHT_usbstick + 8);
++    }
 +}
 +
 +#endif
  
  #ifdef HAVE_REMOTE_LCD
  #include "bitmaps/remote_usblogo.h"
-@@ -75,6 +178,96 @@ static void draw_usb_keypad_mode(struct viewport *title)
+@@ -75,6 +184,96 @@ static void draw_usb_keypad_mode(struct viewport *title)
  }
  #endif /* USB_ENABLE_HID */
  
@@ -15516,7 +15529,7 @@ index b1a12d2d83..4ebe6202bd 100644
  static void handle_usb_events(struct viewport *title)
  {
  #if (CONFIG_STORAGE & STORAGE_MMC) && !defined(SIMULATOR)
-@@ -83,8 +276,40 @@ static void handle_usb_events(struct viewport *title)
+@@ -83,8 +282,40 @@ static void handle_usb_events(struct viewport *title)
      int button;
  
      /* Don't return until we get SYS_USB_DISCONNECTED */
@@ -15557,7 +15570,7 @@ index b1a12d2d83..4ebe6202bd 100644
  #ifndef USB_ENABLE_HID
          (void)title;
  #else
-@@ -99,8 +324,12 @@ static void handle_usb_events(struct viewport *title)
+@@ -99,8 +330,12 @@ static void handle_usb_events(struct viewport *title)
  #endif
          {
              /* hid emits the event in get_action */
@@ -15570,7 +15583,7 @@ index b1a12d2d83..4ebe6202bd 100644
          }
          if (button == SYS_USB_DISCONNECTED)
              return;
-@@ -140,7 +369,8 @@ static void usb_screen_fix_viewports(struct screen *screen,
+@@ -140,7 +375,8 @@ static void usb_screen_fix_viewports(struct screen *screen,
          logo_height = BMPHEIGHT_usblogo;
      }
  
@@ -15580,7 +15593,7 @@ index b1a12d2d83..4ebe6202bd 100644
  
      if (logo_width  > parent->width)
          logo_width  = parent->width;
-@@ -204,6 +434,12 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
+@@ -204,6 +440,12 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
          &bm_remote_usblogo,
  #endif
      };
@@ -15593,7 +15606,7 @@ index b1a12d2d83..4ebe6202bd 100644
      FOR_NB_SCREENS(i)
      {
          struct screen *screen = &screens[i];
-@@ -224,6 +460,21 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
+@@ -224,6 +466,21 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
  #endif
  }
  
@@ -15615,7 +15628,7 @@ index b1a12d2d83..4ebe6202bd 100644
  void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
  {
  #ifdef SIMULATOR /* the sim allows toggling USB fast enough to overflow viewportmanagers stack */
-@@ -244,6 +495,12 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+@@ -244,6 +501,12 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
  #endif
  
      push_current_activity(ACTIVITY_USBSCREEN);
@@ -15628,7 +15641,7 @@ index b1a12d2d83..4ebe6202bd 100644
  
  #ifdef USB_ENABLE_HID
      usb_keypad_mode = global_settings.usb_keypad_mode;
-@@ -275,7 +532,24 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+@@ -275,9 +538,35 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
          /* The font system leaves the .fnt fd's open, so we need for force close them all */
          font_disable_all();
      }
@@ -15651,9 +15664,20 @@ index b1a12d2d83..4ebe6202bd 100644
      usb_acknowledge(SYS_USB_CONNECTED_ACK, seqnum);
 +#endif
      usb_screens_draw(usb_screen_vps_ar);
++#if defined(ASHER_USB) && defined(IPOD_VIDEO) && !defined(SIMULATOR)
++    /* 2.7.4: the 5G/5.5G draws every pixel to its screen chip by hand,
++       and the computer's file copying shares the CPU. Run at full speed
++       here (it's on the charger anyway) so the animation keeps up. */
++    cpu_boost(true);
      handle_usb_events(title);
++    cpu_boost(false);
++#else
++    handle_usb_events(title);
++#endif
  
-@@ -293,14 +567,56 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+ #if defined(USB_ENABLE_HID)
+     if (global_settings.usb_hid)
+@@ -293,14 +582,56 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
      touchscreen_set_mode(old_mode);
  #endif
  
@@ -17786,7 +17810,7 @@ index 1f4ca13dc8..b463cfddbc 100644
      if (hold_button != hold_button_old)
      {
 diff --git a/firmware/target/arm/ipod/video/lcd-video.c b/firmware/target/arm/ipod/video/lcd-video.c
-index 5ab9498e42..fc4f3d3a1d 100644
+index 5ab9498e42..fa054cb387 100644
 --- a/firmware/target/arm/ipod/video/lcd-video.c
 +++ b/firmware/target/arm/ipod/video/lcd-video.c
 @@ -110,6 +110,10 @@ struct
@@ -17811,7 +17835,32 @@ index 5ab9498e42..fc4f3d3a1d 100644
  
      if (x + width >= LCD_WIDTH)
          width = LCD_WIDTH - x;
-@@ -599,6 +607,16 @@ static void bcm_init(void)
+@@ -431,6 +439,24 @@ void lcd_update_rect(int x, int y, int width, int height)
+     lcd_unblock_and_update();
+ }
+ 
++#ifndef BOOTLOADER
++/* Asher OS 2.7.4: for animations. Wait (up to max_ticks) until the BCM
++ * has finished putting the last frame on the glass, so the next frame
++ * isn't written into the middle of that and the picture doesn't tear. */
++void lcd_wait_frame_done(int max_ticks)
++{
++    long until = current_tick + max_ticks;
++    while (1)
++    {
++        int oldlevel = disable_irq_save();
++        bool busy = lcd_state.state >= LCD_NEED_UPDATE;
++        restore_irq(oldlevel);
++        if (!busy || TIME_AFTER(current_tick, until)) return;
++        yield();
++    }
++}
++#endif
++
+ /* Update the display.
+    This must be called after all other LCD functions that change the display. */
+ void lcd_update(void)
+@@ -599,6 +625,16 @@ static void bcm_init(void)
  
  void lcd_awake(void)
  {
@@ -17828,7 +17877,7 @@ index 5ab9498e42..fc4f3d3a1d 100644
      if (!lcd_state.display_on && flash_vmcs_length != 0)
      {
          /* Ensure BCM has been off for >= 50 ms */
-@@ -619,7 +637,27 @@ void lcd_awake(void)
+@@ -619,7 +655,27 @@ void lcd_awake(void)
           */
          lcd_state.waking = true;
          tick_add_task(&lcd_tick);
@@ -17856,7 +17905,7 @@ index 5ab9498e42..fc4f3d3a1d 100644
  
          send_event(LCD_EVENT_ACTIVATION, NULL);
      }
-@@ -627,6 +665,24 @@ void lcd_awake(void)
+@@ -627,6 +683,24 @@ void lcd_awake(void)
  
  void lcd_sleep(void)
  {
@@ -17881,7 +17930,7 @@ index 5ab9498e42..fc4f3d3a1d 100644
      if (lcd_state.display_on && flash_vmcs_length != 0)
      {
          lcd_state.display_on = false;
-@@ -645,6 +701,9 @@ void lcd_sleep(void)
+@@ -645,6 +719,9 @@ void lcd_sleep(void)
  
  bool lcd_active(void)
  {
