@@ -1,8 +1,8 @@
 diff --git a/apps/SOURCES b/apps/SOURCES
-index bb612b38fb..6506435479 100644
+index bb612b38fb..def2bfc012 100644
 --- a/apps/SOURCES
 +++ b/apps/SOURCES
-@@ -20,6 +20,26 @@ menu.c
+@@ -20,6 +20,27 @@ menu.c
  menus/menu_common.c
  menus/display_menu.c
  menus/theme_menu.c
@@ -14,6 +14,7 @@ index bb612b38fb..6506435479 100644
 +asher/asher_home.c
 +asher/asher_ui.c
 +asher/asher_usb.c
++asher/asher_tz.c
 +asher/asher_alert.c
 +asher/asher_font3d.c
 +asher/asher_model.c
@@ -67,10 +68,10 @@ index a9029457f8..4f215d2085 100644
  
 diff --git a/apps/asher/asher_alert.c b/apps/asher/asher_alert.c
 new file mode 100644
-index 0000000000..3685ecf9ae
+index 0000000000..ec5151c5e3
 --- /dev/null
 +++ b/apps/asher/asher_alert.c
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,173 @@
 +/* Asher OS 2.7.3: low battery warning.
 + * When the battery holds at 2% (or less) the iPod buzzes (the Taptic
 + * Engine that sits where the click speaker was, on the 5.5) twice like a
@@ -191,23 +192,22 @@ index 0000000000..3685ecf9ae
 +    mixer_channel_play_data(PCM_MIXER_CHAN_VOICE, &cbs, s, sz);
 +}
 +
-+/* the Taptic Engine: two ~0.4 s buzzes, like a text message */
++/* the Taptic Engine: one long ~2 s buzz (runs on the piezo thread,
++   so nothing here waits for it) */
 +static void buzz(void)
 +{
 +#if defined(IPOD_VIDEO) && !defined(SIMULATOR)
-+    piezo_play_for_tick(piezo_hz(175), 0x80, HZ * 2 / 5);
-+    sleep(HZ * 55 / 100);
-+    piezo_play_for_tick(piezo_hz(175), 0x80, HZ * 2 / 5);
++    piezo_play_for_tick(piezo_hz(175), 0x80, HZ * 2);
 +#endif
 +}
 +
-+static void warn_now(void)
++static void warn_now(bool may_wait)
 +{
 +    chime_start();
-+    if (aui_depth > 0 && aui_screen_on())
-+        asher_toast("Battery 2% - charge soon", 3 * HZ, false);
 +    buzz();
 +    ch_done_at = current_tick + HZ;            /* music back up after this */
++    if (aui_screen_on())
++        asher_toast_hold("Battery 2% - charge soon", 4 * HZ, may_wait);
 +}
 +
 +/* called about ten times a second from the helper thread */
@@ -237,13 +237,13 @@ index 0000000000..3685ecf9ae
 +    if (warned) return;
 +    if (++low_secs < HOLD_SECS) return;
 +    warned = true;
-+    warn_now();
++    warn_now(false);
 +}
 +
 +/* Settings test hook: play it now (no battery checks) */
 +void asher_alert_test(void)
 +{
-+    warn_now();
++    warn_now(true);
 +}
 diff --git a/apps/asher/asher_alert.h b/apps/asher/asher_alert.h
 new file mode 100644
@@ -475,10 +475,10 @@ index 0000000000..7aed25e428
 +#endif
 diff --git a/apps/asher/asher_font3d.c b/apps/asher/asher_font3d.c
 new file mode 100644
-index 0000000000..06c63876a7
+index 0000000000..894204fc6f
 --- /dev/null
 +++ b/apps/asher/asher_font3d.c
-@@ -0,0 +1,306 @@
+@@ -0,0 +1,356 @@
 +/* Asher OS 2.5: the 3D retro lettering and the pop-up messages.
 + *
 + * Letters (from Oswald, SIL Open Font License) come pre-drawn in
@@ -500,6 +500,7 @@ index 0000000000..06c63876a7
 +#include "lcd.h"
 +#include "asher_ui.h"
 +#include "asher_font3d.h"
++#include "button.h"
 +
 +#define UI_DIR "/.rockbox/asher/ui/"
 +
@@ -759,6 +760,55 @@ index 0000000000..06c63876a7
 +    return true;
 +}
 +
++/* an important pop-up that stays up for the full time given.
++   Over an Asher screen it floats on top; over a Rockbox screen (a
++   settings menu) it waits there until the time is up or a button. */
++static char held_text[64];
++static long held_until;
++
++bool asher_toast_hold(const char *text, int ticks, bool may_wait)
++{
++    if (!f3d_ok(F3D_BIG) || !text || !text[0]) return false;
++    strlcpy(t_text, text, sizeof(t_text));
++    t_layout();
++    if (t_lines == 0) return true;
++    t_until = current_tick + ticks;
++    t_draw();
++    lcd_update_rect(t_x, t_y, t_w, t_h);
++    if (aui_depth > 0)
++    {
++        t_up = true;
++        return true;
++    }
++    t_up = false;
++    if (!may_wait)
++    {
++        /* a settings screen is up and we can't hold it there: show it
++           again for the rest of its time once an Asher screen is back */
++        strlcpy(held_text, text, sizeof(held_text));
++        held_until = t_until;
++        return true;
++    }
++    button_clear_queue();
++    while (TIME_BEFORE(current_tick, t_until))
++    {
++        int b = button_get_w_tmo(HZ / 10);
++        if (b != BUTTON_NONE && !(b & BUTTON_REL) && !(b & SYS_EVENT))
++            break;
++    }
++    button_clear_queue();
++    return true;
++}
++
++/* aui_begin(): bring back a held pop-up that a settings screen hid */
++void asher_toast_resume(void)
++{
++    if (!held_text[0]) return;
++    long left = held_until - current_tick;
++    if (left > HZ / 2) asher_toast_hold(held_text, (int)left, false);
++    held_text[0] = 0;
++}
++
 +/* called by aui_update(): keep the pop-up on top while it lasts */
 +void asher_toast_overlay(void)
 +{
@@ -787,10 +837,10 @@ index 0000000000..06c63876a7
 +}
 diff --git a/apps/asher/asher_font3d.h b/apps/asher/asher_font3d.h
 new file mode 100644
-index 0000000000..541fe549c4
+index 0000000000..4be36813e9
 --- /dev/null
 +++ b/apps/asher/asher_font3d.h
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,21 @@
 +#ifndef ASHER_FONT3D_H
 +#define ASHER_FONT3D_H
 +#include <stdbool.h>
@@ -808,6 +858,8 @@ index 0000000000..541fe549c4
 +void asher_toast_overlay(void);
 +bool asher_toast_expired(void);
 +int  asher_toast_tmo(int tmo);
++bool asher_toast_hold(const char *text, int ticks, bool may_wait); /* full time */
++void asher_toast_resume(void);
 +extern int aui_depth;
 +#endif
 diff --git a/apps/asher/asher_home.c b/apps/asher/asher_home.c
@@ -6113,10 +6165,10 @@ index 0000000000..1599b35384
 +#endif
 diff --git a/apps/asher/asher_prefs.c b/apps/asher/asher_prefs.c
 new file mode 100644
-index 0000000000..957d1b7184
+index 0000000000..45891199c4
 --- /dev/null
 +++ b/apps/asher/asher_prefs.c
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,156 @@
 +#include <stdio.h>
 +#include <string.h>
 +#include <fcntl.h>
@@ -6127,6 +6179,7 @@ index 0000000000..957d1b7184
 +#include "storage.h"
 +#include "usb.h"
 +#include "asher_prefs.h"
++#include "asher_tz.h"
 +
 +#define PREFS_FILE "/.rockbox/asher/prefs.txt"
 +
@@ -6187,7 +6240,7 @@ index 0000000000..957d1b7184
 +
 +void asher_prefs_load(void)
 +{
-+    char buf[96];
++    char buf[128];
 +    int fd = open(PREFS_FILE, O_RDONLY), n = 0;
 +    if (fd >= 0) { n = read(fd, buf, sizeof(buf) - 1); close(fd); }
 +    if (n < 0) n = 0;
@@ -6214,6 +6267,7 @@ index 0000000000..957d1b7184
 +        if (p[0] == 'g' && v <= BOOT_SELECT) asher_boot_mode = v;
 +        if (p[0] == 'c' && v <= 1) asher_boot_chime = v;
 +        if (p[0] == 'm' && v >= 5 && v <= 50) { asher_wheel_main = v; got_m = true; }
++        if (p[0] == 'z' && v < asher_tz_count()) asher_tz = v;
 +        if (p[0] == 'u' && v >= 5 && v <= 50) { asher_wheel_music = v; got_u = true; }
 +    }
 +    /* the player's own shuffle switch is the truth for on/off */
@@ -6235,13 +6289,13 @@ index 0000000000..957d1b7184
 +
 +void asher_prefs_save(void)
 +{
-+    char buf[96];
++    char buf[128];
 +    int b = battery_level();
 +    if (b > 99) b = 99;
-+    int n = snprintf(buf, sizeof(buf), "o=%d\ns=%d\nm=%d\nu=%d\nw=%d\nb=%02d\nh=1\ng=%d\nc=%d\n",
++    int n = snprintf(buf, sizeof(buf), "o=%d\ns=%d\nm=%d\nu=%d\nw=%d\nb=%02d\nh=1\ng=%d\nc=%d\nz=%d\n",
 +                     asher_organize, asher_shufmode, asher_wheel_main,
 +                     asher_wheel_music, asher_wheel, b < 0 ? 0 : b,
-+                     asher_boot_mode, asher_boot_chime);
++                     asher_boot_mode, asher_boot_chime, asher_tz);
 +    int fd = open(PREFS_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 +    if (fd >= 0) { write(fd, buf, n); close(fd); }
 +}
@@ -8371,12 +8425,147 @@ index 0000000000..728fa524c6
 +void asher_theme_apply_saved(void);   /* call once at boot */
 +const char *asher_wallpaper_name(void); /* e.g. "Rainy Cabin" or NULL if off */
 +#endif
+diff --git a/apps/asher/asher_tz.c b/apps/asher/asher_tz.c
+new file mode 100644
+index 0000000000..2498b273e1
+--- /dev/null
++++ b/apps/asher/asher_tz.c
+@@ -0,0 +1,115 @@
++/* Asher OS 2.7.4: quick time zone switch.
++ * Picking a new zone moves the clock by the difference between the two
++ * zones (summer time included) and keeps the minutes and seconds as they
++ * are, so the time never has to be set again by hand. */
++#include <stdbool.h>
++#include <stdio.h>
++#include <string.h>
++#include "config.h"
++#include "time.h"
++#include "timefuncs.h"
++#include "settings.h"
++#include "splash.h"
++#include "asher_prefs.h"
++#include "asher_tz.h"
++
++enum { DST_NONE, DST_US, DST_EU };
++
++static const struct { const char *name; int std_min; int dst; } zones[] = {
++    { "Hawaii",                 -10 * 60, DST_NONE },
++    { "Alaska",                  -9 * 60, DST_US   },
++    { "Pacific (Las Vegas)",     -8 * 60, DST_US   },
++    { "Mountain (Wyoming)",      -7 * 60, DST_US   },
++    { "Arizona",                 -7 * 60, DST_NONE },
++    { "Central",                 -6 * 60, DST_US   },
++    { "Eastern",                 -5 * 60, DST_US   },
++    { "Atlantic (Puerto Rico)",  -4 * 60, DST_NONE },
++    { "London",                   0,      DST_EU   },
++    { "Central Europe",           1 * 60, DST_EU   },
++    { "Japan / Korea",            9 * 60, DST_NONE },
++};
++#define NZONES ((int)(sizeof(zones) / sizeof(zones[0])))
++
++int asher_tz = TZ_DEFAULT;
++
++/* seconds since 1970 (UTC) of 00:00 on the nth Sunday of a month
++   (n = -1: the last one) */
++static time_t nth_sunday(int year, int mon, int n)
++{
++    struct tm t;
++    memset(&t, 0, sizeof(t));
++    t.tm_year = year - 1900; t.tm_mon = mon; t.tm_mday = 1;
++    time_t first = mktime(&t);
++    struct tm g; gmtime_r(&first, &g);
++    int day = 1 + (7 - g.tm_wday) % 7;          /* first Sunday */
++    if (n > 0) day += 7 * (n - 1);
++    else
++    {
++        static const int len[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
++        while (day + 7 <= len[mon]) day += 7;   /* Mar / Oct have 31 days */
++    }
++    return first + (time_t)(day - 1) * 86400;
++}
++
++/* minutes ahead of UTC for zone z at the moment utc */
++static int offset_at(int z, time_t utc)
++{
++    int std = zones[z].std_min;
++    if (zones[z].dst == DST_NONE) return std;
++    struct tm g; gmtime_r(&utc, &g);
++    int y = g.tm_year + 1900;
++    time_t on, off;
++    if (zones[z].dst == DST_US)
++    {   /* 2:00 local standard time .. 2:00 local summer time */
++        on  = nth_sunday(y, 2, 2)  + 2 * 3600 - std * 60;
++        off = nth_sunday(y, 10, 1) + 2 * 3600 - (std + 60) * 60;
++    }
++    else
++    {   /* 01:00 UTC on the last Sundays of March and October */
++        on  = nth_sunday(y, 2, -1) + 3600;
++        off = nth_sunday(y, 9, -1) + 3600;
++    }
++    return (utc >= on && utc < off) ? std + 60 : std;
++}
++
++static void move_clock(int from, int to)
++{
++    struct tm *now = get_time();
++    if (!now || now->tm_year < 100) return;     /* clock never set */
++    struct tm cur = *now;
++    time_t local = mktime(&cur);
++    /* this zone's offset, looked up at the UTC the clock is showing */
++    time_t utc = local - (time_t)zones[from].std_min * 60;
++    utc = local - (time_t)offset_at(from, utc) * 60;
++    time_t nl = utc + (time_t)offset_at(to, utc) * 60;
++    struct tm out; gmtime_r(&nl, &out);
++    set_time(&out);
++}
++
++const char *asher_tz_name(void)
++{
++    return (asher_tz >= 0 && asher_tz < NZONES) ? zones[asher_tz].name : "";
++}
++
++int asher_tz_count(void) { return NZONES; }
++
++int asher_tz_screen(void)
++{
++    static struct opt_items items[NZONES];
++    for (int i = 0; i < NZONES; i++)
++    {
++        items[i].string = (const unsigned char *)zones[i].name;
++        items[i].voice_id = -1;
++    }
++    int old = asher_tz, pick = asher_tz;
++    if (old < 0 || old >= NZONES) old = pick = TZ_DEFAULT;
++    set_option("Time Zone", &pick, RB_INT, items, NZONES, NULL);
++    if (pick != old && pick >= 0 && pick < NZONES)
++    {
++        move_clock(old, pick);
++        asher_tz = pick;
++        asher_prefs_save();
++        splash(HZ, "Clock moved to the new time zone");
++    }
++    return 0;
++}
+diff --git a/apps/asher/asher_tz.h b/apps/asher/asher_tz.h
+new file mode 100644
+index 0000000000..b9d90c7acd
+--- /dev/null
++++ b/apps/asher/asher_tz.h
+@@ -0,0 +1,8 @@
++#ifndef ASHER_TZ_H
++#define ASHER_TZ_H
++#define TZ_DEFAULT 2              /* Pacific (Las Vegas) */
++extern int asher_tz;              /* which zone the clock is set to */
++int asher_tz_screen(void);        /* Settings > Time & Date > Time Zone */
++const char *asher_tz_name(void);
++int asher_tz_count(void);
++#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..127596b59c
+index 0000000000..08f06b7145
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,1785 @@
+@@ -0,0 +1,1788 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -9227,7 +9416,7 @@ index 0000000000..127596b59c
 +        /* quick while something loads, otherwise a calm 10 times a second
 +         * (just enough for the hold switch to feel instant) */
 +        bool live = !ldr_live && aui_live_active();
-+        sleep(ldr_live ? HZ / 25 : live ? HZ / 20 : HZ / 10);
++        sleep(ldr_live ? HZ / 25 : live ? HZ / 30 : HZ / 10);   /* 2.7.4: scrolling text ~33 fps */
 +        if (live && !ldr_in_draw) aui_live_tick();
 +        asher_alert_tick();                 /* 2.7.3: low battery warning */
 +        if (in_boosted && TIME_AFTER(current_tick, in_until))
@@ -9732,7 +9921,7 @@ index 0000000000..127596b59c
 +
 +/* text too long for its box slides along, waits, and starts over */
 +#define MQ_MAX 5
-+struct mq { bool used, live; int font, x, y, w; unsigned rgb; long start; char s[160]; };
++struct mq { bool used, live; int font, x, y, w, last; unsigned rgb; long start; char s[160]; };
 +static struct mq mqs[MQ_MAX];
 +
 +static int mq_offset(struct mq *m, int tw)
@@ -9750,6 +9939,8 @@ index 0000000000..127596b59c
 +    int fid = aui_font(m->font), tw = 0, th = 0;
 +    font_getstringsize((const unsigned char *)m->s, &tw, &th, fid);
 +    int off = mq_offset(m, tw);
++    if (update && off == m->last) return;   /* hasn't moved a pixel yet */
++    m->last = off;
 +    struct viewport *prev = lcd_set_viewport(NULL);
 +    struct viewport *dflt = lcd_set_viewport(prev);
 +    struct viewport vp = *dflt;
@@ -9981,6 +10172,7 @@ index 0000000000..127596b59c
 +{
 +    aui_depth++;
 +    aui_init();
++    asher_toast_resume();
 +    viewportmanager_theme_enable(SCREEN_MAIN, false, NULL);
 +    lcd_set_viewport(NULL);
 +    lcd_set_drawmode(DRMODE_SOLID);
@@ -10164,7 +10356,7 @@ index 0000000000..127596b59c
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..afe0c42196
+index 0000000000..c1fb9e9283
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
 @@ -0,0 +1,150 @@
@@ -10314,16 +10506,16 @@ index 0000000000..afe0c42196
 +bool aui_woke(void);                    /* screen just turned back on? */
 +extern bool aui_dirty;                  /* set to make the screen redraw */
 +extern long aui_quiet_until;
-+#define ASHER_OS_VERSION "2.7.3"
++#define ASHER_OS_VERSION "2.7.4"
 +#define ASHER_ASSETS_VERSION "2.7"
 +extern bool aui_assets_old;      /* the .rockbox picture files are older than the firmware */            /* skip loading screens until this tick */
 +#endif
 diff --git a/apps/asher/asher_usb.c b/apps/asher/asher_usb.c
 new file mode 100644
-index 0000000000..6af84a235d
+index 0000000000..0ed217aa82
 --- /dev/null
 +++ b/apps/asher/asher_usb.c
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,305 @@
 +/* Asher OS 2.7: the "connected to a computer" screens, one per theme.
 + * Everything here is drawn by code (nothing is read from the drive, which
 + * belongs to the computer while this is up) and always has something
@@ -10465,6 +10657,10 @@ index 0000000000..6af84a235d
 +        put_rect(x - 2, y - 2, w + 4, h + 4);
 +        return;
 +    }
++    static int last_ph = -1;
++    int ph = tick_frame(80) % 12;
++    if (ph == last_ph) return;            /* same spoke lit: nothing to draw */
++    last_ph = ph;
 +    spinner(dark);
 +    put_rect(SP_X - 13, SP_Y - 13, 26, 26);
 +}
@@ -10534,6 +10730,10 @@ index 0000000000..6af84a235d
 +        put_rect(x - 2, y - 2, w + 4, 10);
 +        return;
 +    }
++    static int last_ph = -1;
++    int ph = tick_frame(110) % 10;
++    if (ph == last_ph) return;
++    last_ph = ph;
 +    md_flow(false);
 +    put_rect(104, MD_Y - 8, 82, 16);
 +}
@@ -10549,7 +10749,9 @@ index 0000000000..6af84a235d
 +    int f = tick_frame(60);
 +    aui_fill(MN_LX, MP_FOOT_Y - 2, MN_LW, 5, MP_BG);
 +    aui_fill(MN_LX, MP_FOOT_Y, MN_LW, 1, MP_FG);
-+    int x = MN_LX + (f * 4) % MN_LW;
++    /* 2.7.4: glides at an even 50 px a second instead of hopping */
++    long ms = (long)current_tick * (1000 / HZ);
++    int x = MN_LX + 2 + (int)(ms * 50 / 1000 % (MN_LW - 4));
 +    aui_fill(x - 2, MP_FOOT_Y - 2, 5, 5, MP_FG);
 +    aui_fill(x - 1, MP_FOOT_Y - 1, 3, 3, MP_BG);
 +    static const short st[3][2] = { { 40, 160 }, { 120, 178 }, { 220, 150 } };
@@ -15104,10 +15306,10 @@ index 440164984b..5b11efd34a 100644
      {
          struct screen * screen = &(screens[i]);
 diff --git a/apps/gui/usb_screen.c b/apps/gui/usb_screen.c
-index b1a12d2d83..30e467e28e 100644
+index b1a12d2d83..4ebe6202bd 100644
 --- a/apps/gui/usb_screen.c
 +++ b/apps/gui/usb_screen.c
-@@ -43,6 +43,104 @@
+@@ -43,6 +43,109 @@
  #include "icons.h"
  
  #include "bitmaps/usblogo.h"
@@ -15191,8 +15393,13 @@ index b1a12d2d83..30e467e28e 100644
 +        else lcd_update_rect(x, M_AY, m_usb.w, m_usb.h);
 +        return;
 +    }
-+    static const signed char bob[16] = { 0, 1, 2, 3, 3, 3, 2, 1, 0, -1, -2, -3, -3, -3, -2, -1 };
-+    int off = bob[(current_tick / (HZ / 10)) & 15];
++    /* 2.7.4: a slow, even float (one breath every 1.6 s, drawn ~25 times
++       a second) instead of 10 jumpy steps a second */
++    static const signed char bob[64] = { 0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 0, 0, 0, -1, -1, -1, -2, -2, -2, -2, -3, -3, -3, -3, -3, -3, -3, -4, -3, -3, -3, -3, -3, -3, -3, -2, -2, -2, -2, -1, -1, -1, 0 };
++    static int last_off = 99;
++    int off = bob[(int)(((long)current_tick * (1000 / HZ) % 1600) * 64 / 1600)];
++    if (!full && off == last_off) return;     /* nothing moved: no redraw */
++    last_off = off;
 +    lcd_set_viewport(NULL);
 +    lcd_set_drawmode(DRMODE_SOLID);
 +    if (full)
@@ -15212,7 +15419,7 @@ index b1a12d2d83..30e467e28e 100644
  
  #ifdef HAVE_REMOTE_LCD
  #include "bitmaps/remote_usblogo.h"
-@@ -75,6 +173,96 @@ static void draw_usb_keypad_mode(struct viewport *title)
+@@ -75,6 +178,96 @@ static void draw_usb_keypad_mode(struct viewport *title)
  }
  #endif /* USB_ENABLE_HID */
  
@@ -15309,7 +15516,7 @@ index b1a12d2d83..30e467e28e 100644
  static void handle_usb_events(struct viewport *title)
  {
  #if (CONFIG_STORAGE & STORAGE_MMC) && !defined(SIMULATOR)
-@@ -83,8 +271,40 @@ static void handle_usb_events(struct viewport *title)
+@@ -83,8 +276,40 @@ static void handle_usb_events(struct viewport *title)
      int button;
  
      /* Don't return until we get SYS_USB_DISCONNECTED */
@@ -15350,12 +15557,12 @@ index b1a12d2d83..30e467e28e 100644
  #ifndef USB_ENABLE_HID
          (void)title;
  #else
-@@ -99,8 +319,12 @@ static void handle_usb_events(struct viewport *title)
+@@ -99,8 +324,12 @@ static void handle_usb_events(struct viewport *title)
  #endif
          {
              /* hid emits the event in get_action */
 +#ifdef ASHER_USB
-+            button = button_get_w_tmo(ej_on ? HZ/25 : HZ/10);
++            button = button_get_w_tmo(HZ/25);   /* 2.7.4: ~25 frames a second on every theme */
 +#else
              send_event(GUI_EVENT_ACTIONUPDATE, NULL);
              button = button_get_w_tmo(HZ/2);
@@ -15363,7 +15570,7 @@ index b1a12d2d83..30e467e28e 100644
          }
          if (button == SYS_USB_DISCONNECTED)
              return;
-@@ -140,7 +364,8 @@ static void usb_screen_fix_viewports(struct screen *screen,
+@@ -140,7 +369,8 @@ static void usb_screen_fix_viewports(struct screen *screen,
          logo_height = BMPHEIGHT_usblogo;
      }
  
@@ -15373,7 +15580,7 @@ index b1a12d2d83..30e467e28e 100644
  
      if (logo_width  > parent->width)
          logo_width  = parent->width;
-@@ -204,6 +429,12 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
+@@ -204,6 +434,12 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
          &bm_remote_usblogo,
  #endif
      };
@@ -15386,7 +15593,7 @@ index b1a12d2d83..30e467e28e 100644
      FOR_NB_SCREENS(i)
      {
          struct screen *screen = &screens[i];
-@@ -224,6 +455,21 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
+@@ -224,6 +460,21 @@ static void usb_screens_draw(struct usb_screen_vps_t *usb_screen_vps_ar)
  #endif
  }
  
@@ -15408,7 +15615,7 @@ index b1a12d2d83..30e467e28e 100644
  void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
  {
  #ifdef SIMULATOR /* the sim allows toggling USB fast enough to overflow viewportmanagers stack */
-@@ -244,6 +490,12 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+@@ -244,6 +495,12 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
  #endif
  
      push_current_activity(ACTIVITY_USBSCREEN);
@@ -15421,7 +15628,7 @@ index b1a12d2d83..30e467e28e 100644
  
  #ifdef USB_ENABLE_HID
      usb_keypad_mode = global_settings.usb_keypad_mode;
-@@ -275,7 +527,24 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+@@ -275,7 +532,24 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
          /* The font system leaves the .fnt fd's open, so we need for force close them all */
          font_disable_all();
      }
@@ -15446,7 +15653,7 @@ index b1a12d2d83..30e467e28e 100644
      usb_screens_draw(usb_screen_vps_ar);
      handle_usb_events(title);
  
-@@ -293,14 +562,56 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
+@@ -293,14 +567,56 @@ void gui_usb_screen_run(bool early_usb, intptr_t seqnum)
      touchscreen_set_mode(old_mode);
  #endif
  
@@ -16070,7 +16277,7 @@ index 61d16f4cb1..0d354d6cc5 100644
 +          ,&asher_sound_reset_item
           );
 diff --git a/apps/menus/time_menu.c b/apps/menus/time_menu.c
-index 6c282a2865..e5cd8a4d29 100644
+index 6c282a2865..7bde245eae 100644
 --- a/apps/menus/time_menu.c
 +++ b/apps/menus/time_menu.c
 @@ -1,3 +1,4 @@
@@ -16078,7 +16285,18 @@ index 6c282a2865..e5cd8a4d29 100644
  /***************************************************************************
   *             __________               __   ___.
   *   Open      \______   \ ____   ____ |  | _\_ |__   _______  ___
-@@ -224,7 +225,7 @@ static int time_menu_callback(int action,
+@@ -83,6 +84,10 @@ static int timedate_set(void)
+ MENUITEM_FUNCTION(time_set, 0, ID2P(LANG_SET_TIME),
+                   timedate_set, NULL, Icon_NOICON);
+ MENUITEM_SETTING(timeformat, &global_settings.timeformat, NULL);
++/* Asher OS 2.7.4: move the clock to another time zone in one step */
++#include "asher/asher_tz.h"
++MENUITEM_FUNCTION(asher_tz_item, 0, "Time Zone",
++                  asher_tz_screen, NULL, Icon_NOICON);
+ #ifdef HAVE_RTC_ALARM
+ MENUITEM_FUNCTION(alarm_screen_call, 0, ID2P(LANG_ALARM_MOD_ALARM_MENU),
+                   alarm_screen, NULL, Icon_NOICON);
+@@ -224,19 +229,19 @@ static int time_menu_callback(int action,
      return action;
  }
  
@@ -16087,7 +16305,12 @@ index 6c282a2865..e5cd8a4d29 100644
  MENUITEM_SETTING(sync_rds_time, &global_settings.sync_rds_time, NULL);
  #endif
  
-@@ -236,7 +237,7 @@ MAKE_MENU(time_menu, ID2P(LANG_TIME_MENU), time_menu_callback, Icon_NOICON,
+ MAKE_MENU(time_menu, ID2P(LANG_TIME_MENU), time_menu_callback, Icon_NOICON,
+-          &time_set,
++          &time_set, &asher_tz_item,
+ #ifdef HAVE_RTC_ALARM
+           &alarm_screen_call,
+ #if defined(HAVE_RECORDING) || CONFIG_TUNER
            &alarm_wake_up_screen,
  #endif
  #endif
