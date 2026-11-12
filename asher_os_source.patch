@@ -2440,7 +2440,7 @@ index 0000000000..602c7f6ed6
 +#endif
 diff --git a/apps/asher/asher_music.c b/apps/asher/asher_music.c
 new file mode 100644
-index 0000000000..475d0a34d4
+index 0000000000..79cb1f04cc
 --- /dev/null
 +++ b/apps/asher/asher_music.c
 @@ -0,0 +1,2647 @@
@@ -2705,7 +2705,7 @@ index 0000000000..475d0a34d4
 +{
 +    long t0 = current_tick;
 +    while (TIME_BEFORE(current_tick, t0 + HZ * 4)
-+           && (TIME_BEFORE(current_tick, t0 + HZ * 3 / 10) || !audio_current_track()))
++           && !audio_current_track())    /* 2.7.6: straight in once it's ready */
 +    {
 +        loading_tick("LOADING", NULL);
 +        sleep(1);
@@ -6798,10 +6798,10 @@ index 0000000000..b0dca4f355
 +#endif
 diff --git a/apps/asher/asher_settings.c b/apps/asher/asher_settings.c
 new file mode 100644
-index 0000000000..bd743e227a
+index 0000000000..6a78e10518
 --- /dev/null
 +++ b/apps/asher/asher_settings.c
-@@ -0,0 +1,589 @@
+@@ -0,0 +1,623 @@
 +/* Asher OS settings extras: click wheel sound toggle and the version screen. */
 +#include <stdio.h>
 +#include <string.h>
@@ -6869,6 +6869,39 @@ index 0000000000..bd743e227a
 +    snprintf(buf, n, "%llu.%02llu GB", h / 100, h % 100);
 +}
 +
++/* 2.7.6: what the music is stored on */
++#if (CONFIG_STORAGE & STORAGE_ATA) && !defined(SIMULATOR)
++#include "ata.h"
++#endif
++static const char *storage_kind(void)
++{
++#ifdef SIMULATOR
++    return "Simulator";
++#elif defined(IPOD_NANO3G) || defined(IPOD_NANO2G)
++    return "Built-in flash";
++#elif (CONFIG_STORAGE & STORAGE_ATA)
++    static char kind[48];
++    if (kind[0]) return kind;
++    unsigned short *id = ata_get_identify();
++    char model[41];
++    for (int i = 0; i < 20; i++)
++    {
++        model[2 * i] = id[27 + i] >> 8;
++        model[2 * i + 1] = id[27 + i] & 0xff;
++    }
++    model[40] = 0;
++    for (int i = 39; i >= 0 && (model[i] == ' ' || model[i] == 0); i--) model[i] = 0;
++    char *m = model; while (*m == ' ') m++;
++    bool flash = ata_disk_isssd();
++    if (strcasestr(m, "iflash")) strlcpy(kind, "iFlash (SD card)", sizeof(kind));
++    else if (flash) strlcpy(kind, "Flash card / SSD", sizeof(kind));
++    else strlcpy(kind, "Hard drive (stock)", sizeof(kind));
++    return kind;
++#else
++    return "";
++#endif
++}
++
 +static void version_draw(void)
 +{
 +    const struct aui_theme *t = aui_theme();
@@ -6910,6 +6943,7 @@ index 0000000000..bd743e227a
 +    }
 +
 +    aui_text(AF_SMALL, 24, cy + 8, t->sub, "STORAGE", 120, 0);
++    aui_text(AF_SMALL, AUI_W - 24, cy + 8, t->sub, storage_kind(), AUI_W - 150, 2);
 +    if (size)
 +    {
 +        gb_str(b1, sizeof(b1), freek);
@@ -8427,10 +8461,10 @@ index 0000000000..728fa524c6
 +#endif
 diff --git a/apps/asher/asher_tz.c b/apps/asher/asher_tz.c
 new file mode 100644
-index 0000000000..2498b273e1
+index 0000000000..577585ba11
 --- /dev/null
 +++ b/apps/asher/asher_tz.c
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,153 @@
 +/* Asher OS 2.7.4: quick time zone switch.
 + * Picking a new zone moves the clock by the difference between the two
 + * zones (summer time included) and keeps the minutes and seconds as they
@@ -8465,15 +8499,54 @@ index 0000000000..2498b273e1
 +
 +int asher_tz = TZ_DEFAULT;
 +
++/* our own calendar maths (the C library's mktime/gmtime can apply the
++ * computer's own time zone in the simulator; these never do) */
++static long days_from_civil(int y, int m, int d)      /* m 1..12 */
++{
++    y -= m <= 2;
++    long era = (y >= 0 ? y : y - 399) / 400;
++    long yoe = y - era * 400;
++    long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
++    long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
++    return era * 146097 + doe - 719468;
++}
++static void civil_from_days(long z, int *y, int *m, int *d)
++{
++    z += 719468;
++    long era = (z >= 0 ? z : z - 146096) / 146097;
++    long doe = z - era * 146097;
++    long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
++    long yy = yoe + era * 400;
++    long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
++    long mp = (5 * doy + 2) / 153;
++    *d = (int)(doy - (153 * mp + 2) / 5 + 1);
++    *m = (int)(mp < 10 ? mp + 3 : mp - 9);
++    *y = (int)(yy + (*m <= 2));
++}
++static long long tm_to_secs(const struct tm *t)
++{
++    return (long long)days_from_civil(t->tm_year + 1900, t->tm_mon + 1, t->tm_mday) * 86400
++         + t->tm_hour * 3600 + t->tm_min * 60 + t->tm_sec;
++}
++static void secs_to_tm(long long s, struct tm *t)
++{
++    long days = (long)(s >= 0 ? s / 86400 : (s - 86399) / 86400);
++    long rem = (long)(s - (long long)days * 86400);
++    int y, m, d;
++    civil_from_days(days, &y, &m, &d);
++    memset(t, 0, sizeof(*t));
++    t->tm_year = y - 1900; t->tm_mon = m - 1; t->tm_mday = d;
++    t->tm_hour = rem / 3600; t->tm_min = (rem / 60) % 60; t->tm_sec = rem % 60;
++    t->tm_wday = (int)((days % 7 + 11) % 7);        /* 1970-01-01 was a Thursday */
++    t->tm_yday = (int)(days - days_from_civil(y, 1, 1));
++}
++
 +/* seconds since 1970 (UTC) of 00:00 on the nth Sunday of a month
 +   (n = -1: the last one) */
-+static time_t nth_sunday(int year, int mon, int n)
++static long long nth_sunday(int year, int mon, int n)
 +{
-+    struct tm t;
-+    memset(&t, 0, sizeof(t));
-+    t.tm_year = year - 1900; t.tm_mon = mon; t.tm_mday = 1;
-+    time_t first = mktime(&t);
-+    struct tm g; gmtime_r(&first, &g);
++    long long first = (long long)days_from_civil(year, mon + 1, 1) * 86400;
++    struct tm g; secs_to_tm(first, &g);
 +    int day = 1 + (7 - g.tm_wday) % 7;          /* first Sunday */
 +    if (n > 0) day += 7 * (n - 1);
 +    else
@@ -8481,17 +8554,17 @@ index 0000000000..2498b273e1
 +        static const int len[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
 +        while (day + 7 <= len[mon]) day += 7;   /* Mar / Oct have 31 days */
 +    }
-+    return first + (time_t)(day - 1) * 86400;
++    return first + (long long)(day - 1) * 86400;
 +}
 +
 +/* minutes ahead of UTC for zone z at the moment utc */
-+static int offset_at(int z, time_t utc)
++static int offset_at(int z, long long utc)
 +{
 +    int std = zones[z].std_min;
 +    if (zones[z].dst == DST_NONE) return std;
-+    struct tm g; gmtime_r(&utc, &g);
++    struct tm g; secs_to_tm(utc, &g);
 +    int y = g.tm_year + 1900;
-+    time_t on, off;
++    long long on, off;
 +    if (zones[z].dst == DST_US)
 +    {   /* 2:00 local standard time .. 2:00 local summer time */
 +        on  = nth_sunday(y, 2, 2)  + 2 * 3600 - std * 60;
@@ -8509,13 +8582,12 @@ index 0000000000..2498b273e1
 +{
 +    struct tm *now = get_time();
 +    if (!now || now->tm_year < 100) return;     /* clock never set */
-+    struct tm cur = *now;
-+    time_t local = mktime(&cur);
++    long long local = tm_to_secs(now);
 +    /* this zone's offset, looked up at the UTC the clock is showing */
-+    time_t utc = local - (time_t)zones[from].std_min * 60;
-+    utc = local - (time_t)offset_at(from, utc) * 60;
-+    time_t nl = utc + (time_t)offset_at(to, utc) * 60;
-+    struct tm out; gmtime_r(&nl, &out);
++    long long utc = local - (long long)zones[from].std_min * 60;
++    utc = local - (long long)offset_at(from, utc) * 60;
++    long long nl = utc + (long long)offset_at(to, utc) * 60;
++    struct tm out; secs_to_tm(nl, &out);
 +    set_time(&out);
 +}
 +
@@ -8562,10 +8634,10 @@ index 0000000000..b9d90c7acd
 +#endif
 diff --git a/apps/asher/asher_ui.c b/apps/asher/asher_ui.c
 new file mode 100644
-index 0000000000..9d6707f8f3
+index 0000000000..f562e9fdb7
 --- /dev/null
 +++ b/apps/asher/asher_ui.c
-@@ -0,0 +1,1789 @@
+@@ -0,0 +1,1797 @@
 +/* Asher OS shared drawing layer. See asher_ui.h. */
 +#include <stdio.h>
 +#include <string.h>
@@ -9420,6 +9492,14 @@ index 0000000000..9d6707f8f3
 +              : aui_screen_on() ? HZ / 10 : HZ / 4);  /* screen dark: wake less, save battery */
 +        if (live && !ldr_in_draw) aui_live_tick();
 +        asher_alert_tick();                 /* 2.7.3: low battery warning */
++#if defined(HAVE_ATA_POWER_OFF) && !defined(SIMULATOR)
++        {
++            /* 2.7.6: flash storage stays ready while music plays */
++            extern volatile bool ata_keep_power;
++            int ast = audio_status();
++            ata_keep_power = (ast & AUDIO_STATUS_PLAY) && !(ast & AUDIO_STATUS_PAUSE);
++        }
++#endif
 +        if (in_boosted && TIME_AFTER(current_tick, in_until))
 +            { in_boosted = false; cpu_boost(false); }
 +#ifdef HAS_BUTTON_HOLD
@@ -10357,7 +10437,7 @@ index 0000000000..9d6707f8f3
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..5783a95527
+index 0000000000..052444cd0a
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
 @@ -0,0 +1,150 @@
@@ -10507,7 +10587,7 @@ index 0000000000..5783a95527
 +bool aui_woke(void);                    /* screen just turned back on? */
 +extern bool aui_dirty;                  /* set to make the screen redraw */
 +extern long aui_quiet_until;
-+#define ASHER_OS_VERSION "2.7.5"
++#define ASHER_OS_VERSION "2.7.6"
 +#define ASHER_ASSETS_VERSION "2.7"
 +extern bool aui_assets_old;      /* the .rockbox picture files are older than the firmware */            /* skip loading screens until this tick */
 +#endif
@@ -16442,6 +16522,21 @@ index 983fbc92f3..c6e5b55f3f 100644
      if (button&BUTTON_REPEAT)
          last_button = button;
      else
+diff --git a/apps/pcmbuf.c b/apps/pcmbuf.c
+index 3c68cfbf84..dc2f2c8526 100644
+--- a/apps/pcmbuf.c
++++ b/apps/pcmbuf.c
+@@ -1337,7 +1337,9 @@ static void pcmbuf_update_volume(void)
+ static void pcmbuf_fade_tick(void)
+ {
+     /* ~1/3 second for full range fade */
+-    const unsigned int fade_step = MIX_AMP_UNITY / (HZ / 3);
++    /* Asher OS 2.7.6: pause/play fades in 1/12 s (was 1/3 s): feels
++       instant, still no click */
++    const unsigned int fade_step = MIX_AMP_UNITY / (HZ / 12);
+ 
+     if (fade_state == PCM_FADING_IN)
+         fade_vol += MIN(fade_step, MIX_AMP_UNITY - fade_vol);
 diff --git a/apps/playback.c b/apps/playback.c
 index d69b28cd2c..cabf6616bc 100644
 --- a/apps/playback.c
@@ -17500,10 +17595,22 @@ index 781434e07b..a6b02061ac 100644
          && remote_button_hold()
  #elif defined(HAS_BUTTON_HOLD)
 diff --git a/firmware/drivers/ata.c b/firmware/drivers/ata.c
-index 2244a03a0d..1f5c01c576 100644
+index 2244a03a0d..002c9b5b86 100644
 --- a/firmware/drivers/ata.c
 +++ b/firmware/drivers/ata.c
-@@ -680,7 +680,12 @@ void ata_sleepnow(void)
+@@ -101,6 +101,11 @@ static long sleep_timeout = 5*HZ;
+ static long last_disk_activity = -1;
+ #ifdef HAVE_ATA_POWER_OFF
+ static long power_off_tick = 0;
++/* Asher OS 2.7.6: set while music is playing. Flash storage (iFlash/SD)
++ * then stays powered (asleep, a tiny draw) instead of being switched off,
++ * so skipping to a song that isn't loaded yet doesn't wait the half second
++ * or so it takes to power the card back up and set it up again */
++volatile bool ata_keep_power = false;
+ #endif
+ 
+ static uint8_t  multisectors; /* number of supported multisectors */
+@@ -680,7 +685,12 @@ void ata_sleepnow(void)
                  ata_state = ATA_SLEEPING;
  #ifdef HAVE_ATA_POWER_OFF
                  if (ata_disk_can_sleep() || canflush) {
@@ -17517,6 +17624,19 @@ index 2244a03a0d..1f5c01c576 100644
                  }
  #endif
              }
+@@ -1240,7 +1250,11 @@ int ata_event(long id, intptr_t data)
+         /* won't see ATA_BOOT in here */
+         if (ata_state != ATA_ON || !ata_sleep_timed_out()) {
+ #ifdef HAVE_ATA_POWER_OFF
+-            if (ata_state == ATA_SLEEPING && ata_power_off_timed_out()) {
++            if (ata_state == ATA_SLEEPING && ata_power_off_timed_out()
++                && ata_keep_power && ata_disk_isssd()) {
++                power_off_tick = current_tick + 5 * HZ;    /* look again later */
++            }
++            else if (ata_state == ATA_SLEEPING && ata_power_off_timed_out()) {
+                 power_off_tick = 0;
+                 mutex_lock(&ata_mutex);
+                 logf("ata OFF %ld", current_tick);
 diff --git a/firmware/drivers/button_queue.c b/firmware/drivers/button_queue.c
 index 3c6dd9ed74..89390982b4 100644
 --- a/firmware/drivers/button_queue.c
