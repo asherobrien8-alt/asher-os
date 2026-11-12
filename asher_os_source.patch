@@ -10437,7 +10437,7 @@ index 0000000000..f562e9fdb7
 +}
 diff --git a/apps/asher/asher_ui.h b/apps/asher/asher_ui.h
 new file mode 100644
-index 0000000000..052444cd0a
+index 0000000000..4270241846
 --- /dev/null
 +++ b/apps/asher/asher_ui.h
 @@ -0,0 +1,150 @@
@@ -10587,7 +10587,7 @@ index 0000000000..052444cd0a
 +bool aui_woke(void);                    /* screen just turned back on? */
 +extern bool aui_dirty;                  /* set to make the screen redraw */
 +extern long aui_quiet_until;
-+#define ASHER_OS_VERSION "2.7.6"
++#define ASHER_OS_VERSION "2.7.7"
 +#define ASHER_ASSETS_VERSION "2.7"
 +extern bool aui_assets_old;      /* the .rockbox picture files are older than the firmware */            /* skip loading screens until this tick */
 +#endif
@@ -16381,7 +16381,7 @@ index 61d16f4cb1..0d354d6cc5 100644
 +          ,&asher_sound_reset_item
           );
 diff --git a/apps/menus/time_menu.c b/apps/menus/time_menu.c
-index 6c282a2865..7bde245eae 100644
+index 6c282a2865..54c850e945 100644
 --- a/apps/menus/time_menu.c
 +++ b/apps/menus/time_menu.c
 @@ -1,3 +1,4 @@
@@ -16400,7 +16400,7 @@ index 6c282a2865..7bde245eae 100644
  #ifdef HAVE_RTC_ALARM
  MENUITEM_FUNCTION(alarm_screen_call, 0, ID2P(LANG_ALARM_MOD_ALARM_MENU),
                    alarm_screen, NULL, Icon_NOICON);
-@@ -224,19 +229,19 @@ static int time_menu_callback(int action,
+@@ -224,19 +229,14 @@ static int time_menu_callback(int action,
      return action;
  }
  
@@ -16411,14 +16411,15 @@ index 6c282a2865..7bde245eae 100644
  
  MAKE_MENU(time_menu, ID2P(LANG_TIME_MENU), time_menu_callback, Icon_NOICON,
 -          &time_set,
-+          &time_set, &asher_tz_item,
- #ifdef HAVE_RTC_ALARM
-           &alarm_screen_call,
- #if defined(HAVE_RECORDING) || CONFIG_TUNER
-           &alarm_wake_up_screen,
- #endif
- #endif
+-#ifdef HAVE_RTC_ALARM
+-          &alarm_screen_call,
+-#if defined(HAVE_RECORDING) || CONFIG_TUNER
+-          &alarm_wake_up_screen,
+-#endif
+-#endif
 -#if defined(HAVE_RDS_CAP) && defined(CONFIG_RTC)
++          &time_set, &asher_tz_item,
++          /* 2.7.7: Rockbox's wake-up alarm items are left out of Asher OS */
 +#if defined(HAVE_RDS_CAP) && defined(CONFIG_RTC) && !defined(ASHER_OS_NO_RDS)
            &sync_rds_time,
  #endif
